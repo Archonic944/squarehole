@@ -1,206 +1,158 @@
-"""Save and load factory game state."""
+"""Save/load system for factory game state."""
 
 from __future__ import annotations
 
 import os
+from collections import defaultdict
 
 import torch
 
 from .objects import ObjectGenerator
-from .routing import RoutingGraph, RoutingEdge
+from .economy import Economy
+from .routing import RoutingGraph, RoutingNode, RoutingEdge
 from .worker import FactoryWorker
 from .world import FactoryWorld, GENERAL_CHECKPOINT, WHATS_CHECKPOINT
 
-SAVE_VERSION = 1
-
 
 def save_game(world: FactoryWorld, path: str) -> None:
-    """Serialize the full game state and write it to *path* using torch.save.
+    """Serialize the full game state to *path* using torch.save."""
+    # Build worker index for cross-referencing from graph nodes
+    worker_to_idx: dict[int, int] = {id(w): i for i, w in enumerate(world.workers)}
 
-    Parameters
-    ----------
-    world :
-        The :class:`FactoryWorld` to serialize.
-    path :
-        Destination file path.  Parent directories are created as needed.
-    """
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-
-    # --- Workers ---
+    # Serialize workers
     workers_data = []
     for w in world.workers:
-        support = {
-            cls: [t.cpu() for t in tensors]
-            for cls, tensors in w._support_set.items()
-        }
-        workers_data.append(
-            {
-                "name": w.name,
-                "role": w.role,
-                "class_names": list(w.class_names),
-                "num_classes": w.num_classes,
-                "cached_accuracy": w.cached_accuracy,
-                "category_mapping": dict(w.category_mapping),
-                "support_set": support,
-                "stats": {
-                    "total_processed": w.stats.total_processed,
-                    "total_correct": w.stats.total_correct,
-                    "coins_earned": w.stats.coins_earned,
-                },
-            }
-        )
+        support = {}
+        for cls_name, tensors in w._support_set.items():
+            support[cls_name] = [t.cpu() for t in tensors]
+        workers_data.append({
+            "name": w.name,
+            "role": w.role,
+            "class_names": list(w.class_names),
+            "num_classes": w.num_classes,
+            "cached_accuracy": w.cached_accuracy,
+            "category_mapping": dict(w.category_mapping),
+            "support_set": support,
+            "stats": {
+                "total_processed": w.stats.total_processed,
+                "total_correct": w.stats.total_correct,
+                "coins_earned": w.stats.coins_earned,
+            },
+        })
 
-    # --- Graph nodes ---
-    # Build a worker → index map so nodes can reference workers by index.
-    worker_index: dict[int, int] = {id(w): i for i, w in enumerate(world.workers)}
-
-    nodes_data = []
-    for node_id, node in world.graph.nodes.items():
+    # Serialize graph nodes
+    nodes_data = {}
+    for nid, node in world.graph.nodes.items():
         worker_idx = None
         if node.worker is not None:
-            worker_idx = worker_index.get(id(node.worker))
+            worker_idx = worker_to_idx.get(id(node.worker))
+        nodes_data[nid] = {
+            "node_id": nid,
+            "worker_index": worker_idx,
+            "queue_capacity": node.queue_capacity,
+            "edges": [
+                {"output_label": e.output_label, "target": e.target}
+                for e in node.edges
+            ],
+        }
 
-        edges_data = [
-            {"output_label": e.output_label, "target": e.target}
-            for e in node.edges
-        ]
-
-        nodes_data.append(
-            {
-                "node_id": node_id,
-                "queue_capacity": node.queue_capacity,
-                "worker_index": worker_idx,
-                "edges": edges_data,
-            }
-        )
-
-    # --- Economy ---
-    economy_data = {
-        "coins": world.economy.coins,
-        "total_earned": world.economy.total_earned,
-        "total_spent": world.economy.total_spent,
-        "total_penalties": world.economy.total_penalties,
-    }
-
-    state = {
-        "version": SAVE_VERSION,
-        # World
-        "tick_count": world.tick_count,
-        "objects_per_tick": world.objects_per_tick,
-        "speed_level": world.speed_level,
-        "active_categories": list(world.active_categories),
-        "_remaining_categories": list(world._remaining_categories),
-        # Economy
-        "economy": economy_data,
-        # Graph
-        "root_id": world.graph.root_id,
-        "nodes": nodes_data,
-        # Workers
+    data = {
+        "version": 1,
+        "world": {
+            "tick_count": world.tick_count,
+            "objects_per_tick": world.objects_per_tick,
+            "speed_level": world.speed_level,
+            "active_categories": list(world.active_categories),
+            "remaining_categories": list(world._remaining_categories),
+        },
+        "economy": {
+            "coins": world.economy.coins,
+            "total_earned": world.economy.total_earned,
+            "total_spent": world.economy.total_spent,
+            "total_penalties": world.economy.total_penalties,
+        },
+        "graph": {
+            "root_id": world.graph.root_id,
+            "nodes": nodes_data,
+        },
         "workers": workers_data,
-        # Generator
-        "generator_difficulty": world.object_generator.difficulty,
+        "generator": {
+            "difficulty": world.object_generator.difficulty,
+        },
     }
 
-    torch.save(state, path)
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    torch.save(data, path)
 
 
 def load_game(path: str, device: str = "cpu") -> FactoryWorld:
-    """Load a save file produced by :func:`save_game` and return a ready-to-play
-    :class:`FactoryWorld`.
+    """Load a saved game from *path* and return a ready-to-play FactoryWorld."""
+    data = torch.load(path, map_location=device, weights_only=False)
 
-    Parameters
-    ----------
-    path :
-        Path to the save file.
-    device :
-        Torch device string for worker models.
+    # Reconstruct generator
+    gen = ObjectGenerator(difficulty=data["generator"]["difficulty"])
 
-    Returns
-    -------
-    FactoryWorld
-    """
-    state = torch.load(path, map_location=device, weights_only=False)
+    # Reconstruct world
+    world = FactoryWorld(gen)
+    wd = data["world"]
+    world.tick_count = wd["tick_count"]
+    world.objects_per_tick = wd["objects_per_tick"]
+    world.speed_level = wd["speed_level"]
+    world.active_categories = list(wd["active_categories"])
+    world._remaining_categories = list(wd["remaining_categories"])
 
-    # --- Generator ---
-    difficulty = state.get("generator_difficulty", 0.0)
-    generator = ObjectGenerator(difficulty=difficulty)
+    # Reconstruct economy
+    ed = data["economy"]
+    world.economy.coins = ed["coins"]
+    world.economy.total_earned = ed["total_earned"]
+    world.economy.total_spent = ed["total_spent"]
+    world.economy.total_penalties = ed["total_penalties"]
 
-    # --- World skeleton ---
-    world = FactoryWorld(object_generator=generator)
-    world.tick_count = state["tick_count"]
-    world.objects_per_tick = state["objects_per_tick"]
-    world.speed_level = state["speed_level"]
-    world.active_categories = list(state["active_categories"])
-    world._remaining_categories = list(state["_remaining_categories"])
-
-    # --- Economy ---
-    econ_data = state["economy"]
-    world.economy.coins = econ_data["coins"]
-    world.economy.total_earned = econ_data["total_earned"]
-    world.economy.total_spent = econ_data["total_spent"]
-    world.economy.total_penalties = econ_data["total_penalties"]
-
-    # --- Workers ---
-    checkpoint = (
-        GENERAL_CHECKPOINT
-        if os.path.exists(GENERAL_CHECKPOINT)
-        else WHATS_CHECKPOINT
-    )
-
+    # Reconstruct workers
+    checkpoint = GENERAL_CHECKPOINT if os.path.exists(GENERAL_CHECKPOINT) else WHATS_CHECKPOINT
     workers: list[FactoryWorker] = []
-    for wdata in state["workers"]:
-        # num_classes at construction time; the head will be rebuilt by teach()
-        num_classes = max(wdata["num_classes"], 2)
-        worker = FactoryWorker(
-            name=wdata["name"],
+    for wd_worker in data["workers"]:
+        num_classes = max(wd_worker["num_classes"], 2)
+        w = FactoryWorker(
+            name=wd_worker["name"],
             checkpoint_path=checkpoint,
             num_classes=num_classes,
             device=device,
         )
-
-        # Replay support set through teach() so heads and class_names are rebuilt
-        support_set: dict[str, list[torch.Tensor]] = wdata["support_set"]
-        for class_name in wdata["class_names"]:
-            for tensor in support_set.get(class_name, []):
-                worker.teach(tensor.to(device), class_name)
-
-        # Restore fields that teach() would overwrite
-        worker.role = wdata["role"]
-        worker.cached_accuracy = wdata["cached_accuracy"]
-        worker.category_mapping = dict(wdata["category_mapping"])
-
-        # Restore stats
-        stats_data = wdata["stats"]
-        worker.stats.total_processed = stats_data["total_processed"]
-        worker.stats.total_correct = stats_data["total_correct"]
-        worker.stats.coins_earned = stats_data["coins_earned"]
-
-        workers.append(worker)
+        # Teach all support set examples to rebuild head and prepare adaptation
+        for cls_name in wd_worker["class_names"]:
+            tensors = wd_worker["support_set"].get(cls_name, [])
+            for t in tensors:
+                w.teach(t.to(device), cls_name)
+        w.role = wd_worker["role"]
+        w.cached_accuracy = wd_worker["cached_accuracy"]
+        w.category_mapping = dict(wd_worker["category_mapping"])
+        w.stats.total_processed = wd_worker["stats"]["total_processed"]
+        w.stats.total_correct = wd_worker["stats"]["total_correct"]
+        w.stats.coins_earned = wd_worker["stats"]["coins_earned"]
+        workers.append(w)
 
     world.workers = workers
 
-    # --- Graph ---
-    graph = RoutingGraph()
-    for ndata in state["nodes"]:
-        node_id = ndata["node_id"]
-        worker_idx = ndata["worker_index"]
-        worker = workers[worker_idx] if worker_idx is not None else None
-        node = graph.add_node(
-            node_id,
-            worker=worker,
-            queue_capacity=ndata["queue_capacity"],
+    # Reconstruct graph
+    gd = data["graph"]
+    world.graph = RoutingGraph()
+    for nid, nd in gd["nodes"].items():
+        worker = None
+        if nd["worker_index"] is not None:
+            worker = workers[nd["worker_index"]]
+        node = world.graph.add_node(
+            nid, worker=worker, queue_capacity=nd["queue_capacity"]
         )
-        for edata in ndata["edges"]:
+        for ed_edge in nd["edges"]:
             node.edges.append(
                 RoutingEdge(
-                    output_label=edata["output_label"],
-                    target=edata["target"],
+                    output_label=ed_edge["output_label"],
+                    target=ed_edge["target"],
                 )
             )
 
-    # add_node sets root_id to the first inserted node; override with saved value
-    graph.root_id = state.get("root_id")
-
-    world.graph = graph
+    if gd["root_id"] is not None:
+        world.graph.root_id = gd["root_id"]
 
     return world
