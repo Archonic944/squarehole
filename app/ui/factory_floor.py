@@ -3,6 +3,7 @@
 import math
 import random
 import pygame
+import torch
 from collections import deque
 
 from app.ui.drawing_canvas import DrawingCanvas, CANVAS_SIZE
@@ -188,6 +189,11 @@ class FactoryFloorUI:
         self._training_label_idx = 0
         self._training_new_class_input = ""
         self._training_typing_new_class = False
+
+        # Gallery: all drawings ever submitted, reusable across workers
+        self._gallery: list[tuple[pygame.Surface, torch.Tensor]] = []  # (thumb, tensor)
+        self._show_gallery = False
+        self._gallery_scroll = 0
 
         # Dialog state
         self._dialog_title = ""
@@ -742,7 +748,31 @@ class FactoryFloorUI:
         surf84 = self._canvas.get_surface_84()
         tensor = surface_to_tensor(surf84)
         self._training_worker.teach(tensor, label)
+        # Save to gallery
+        self._gallery.append((surf84.copy(), tensor.clone()))
         self._canvas.clear()
+
+    def _train_submit_from_gallery(self, idx):
+        """Reuse a gallery image as a training example."""
+        if not self._training_worker or not self._training_worker.class_names:
+            return
+        if idx >= len(self._gallery):
+            return
+        labels = self._training_worker.class_names
+        if self._training_label_idx >= len(labels):
+            self._training_label_idx = 0
+        label = labels[self._training_label_idx]
+        _, tensor = self._gallery[idx]
+        self._training_worker.teach(tensor.clone(), label)
+
+    def _train_remove_example(self, class_name, example_idx):
+        """Remove a specific example from the worker's support set."""
+        if not self._training_worker:
+            return
+        ss = self._training_worker._support_set.get(class_name, [])
+        if 0 <= example_idx < len(ss):
+            ss.pop(example_idx)
+            self._training_worker._needs_readapt = True
 
     def _train_done(self):
         """Finish training and re-estimate accuracy."""
@@ -1262,17 +1292,67 @@ class FactoryFloorUI:
                 self._training_new_class_input = ""
             label_y += 36
 
-        # Support set counts
+        # Support set preview with thumbnails + delete buttons
         if worker.class_names:
             label_y += 5
-            t = self.font_sm.render("Examples:", True, subtle)
+            t = self.font_sm.render("Support set:", True, subtle)
             surface.blit(t, (label_x, label_y))
             label_y += 16
+            thumb_sz = 28
             for cls_name in worker.class_names:
-                count = len(worker._support_set.get(cls_name, []))
-                t = self.font_sm.render(f"  {cls_name}: {count}", True, title_color)
+                examples = worker._support_set.get(cls_name, [])
+                t = self.font_sm.render(f"{cls_name} ({len(examples)}):", True, title_color)
                 surface.blit(t, (label_x, label_y))
                 label_y += 15
+                # Show thumbnails in a row
+                for ei, ex_tensor in enumerate(examples[:6]):  # cap display at 6
+                    tx = label_x + ei * (thumb_sz + 3)
+                    ty = label_y
+                    # Convert tensor to small surface
+                    arr = (ex_tensor.permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(
+                        __import__('numpy').uint8)
+                    thumb_surf = pygame.surfarray.make_surface(arr.transpose(1, 0, 2))
+                    thumb_surf = pygame.transform.smoothscale(thumb_surf, (thumb_sz, thumb_sz))
+                    surface.blit(thumb_surf, (tx, ty))
+                    # Delete button (small X)
+                    xr = pygame.Rect(tx + thumb_sz - 10, ty, 10, 10)
+                    pygame.draw.rect(surface, (180, 50, 50), xr)
+                    xt = self.font_sm.render("x", True, (255, 255, 255))
+                    surface.blit(xt, (xr.x + 1, xr.y - 2))
+                    if self._click_pos and xr.collidepoint(self._click_pos):
+                        self._train_remove_example(cls_name, ei)
+                if len(examples) > 6:
+                    t = self.font_sm.render(f"+{len(examples)-6}", True, subtle)
+                    surface.blit(t, (label_x + 6 * (thumb_sz + 3), label_y + 8))
+                label_y += thumb_sz + 5 if examples else 2
+
+        # Gallery button + gallery view
+        label_y += 5
+        gallery_label = f"Gallery ({len(self._gallery)})"
+        if self._draw_btn_raw(surface, pygame.Rect(label_x, label_y, 180, 26),
+                              gallery_label, (100, 120, 160)):
+            self._show_gallery = not self._show_gallery
+        label_y += 30
+
+        if self._show_gallery and self._gallery:
+            t = self.font_sm.render("Click to add as current class:", True, subtle)
+            surface.blit(t, (label_x, label_y))
+            label_y += 15
+            gx = label_x
+            for gi, (g_surf, g_tensor) in enumerate(self._gallery):
+                if gi >= 12:  # cap display
+                    break
+                col = gi % 4
+                row = gi // 4
+                tx = label_x + col * (thumb_sz + 3)
+                ty = label_y + row * (thumb_sz + 3)
+                scaled = pygame.transform.smoothscale(g_surf, (thumb_sz, thumb_sz))
+                surface.blit(scaled, (tx, ty))
+                pygame.draw.rect(surface, (100, 100, 100), (tx, ty, thumb_sz, thumb_sz), 1)
+                if self._click_pos and pygame.Rect(tx, ty, thumb_sz, thumb_sz).collidepoint(self._click_pos):
+                    self._train_submit_from_gallery(gi)
+            rows = min(3, (min(len(self._gallery), 12) + 3) // 4)
+            label_y += rows * (thumb_sz + 3) + 5
 
         # Submit / Done buttons
         btn_y = canvas_rect.bottom + 15
