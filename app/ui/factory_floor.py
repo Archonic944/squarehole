@@ -187,13 +187,14 @@ class FactoryFloorUI:
     # ------------------------------------------------------------------
 
     def _layout_graph(self):
-        """Compute node positions using BFS tree layout."""
+        """Compute node positions using a tree layout that accounts for
+        each node's vertical footprint (bins, children, subtree size).
+        """
         self._node_rects.clear()
         self._bin_positions.clear()
 
         graph = self.world.graph
         if not graph.root_id or graph.root_id not in graph.nodes:
-            # No root — just stack nodes vertically
             for i, nid in enumerate(graph.nodes):
                 x = GRAPH_PAD
                 y = GRAPH_Y + GRAPH_PAD + i * (NODE_H + NODE_GAP_Y)
@@ -201,49 +202,113 @@ class FactoryFloorUI:
             self._layout_dirty = False
             return
 
-        # BFS to assign levels
+        # --- Step 1: BFS to assign tree levels ---
         levels: dict[str, int] = {}
-        queue = deque([(graph.root_id, 0)])
+        children: dict[str, list[str]] = {}  # node -> child node ids
+        q = deque([(graph.root_id, 0)])
         visited = set()
         max_level = 0
 
-        while queue:
-            nid, level = queue.popleft()
+        while q:
+            nid, level = q.popleft()
             if nid in visited:
                 continue
             visited.add(nid)
             levels[nid] = level
             max_level = max(max_level, level)
+            children[nid] = []
 
             node = graph.nodes[nid]
             for edge in node.edges:
                 t = edge.target
                 if not t.startswith("BIN:") and t in graph.nodes and t not in visited:
-                    queue.append((t, level + 1))
+                    children[nid].append(t)
+                    q.append((t, level + 1))
 
-        # Nodes not reachable from root
         for nid in graph.nodes:
             if nid not in levels:
                 max_level += 1
                 levels[nid] = max_level
+                children.setdefault(nid, [])
 
-        # Group by level
-        by_level: dict[int, list[str]] = {}
-        for nid, lv in levels.items():
-            by_level.setdefault(lv, []).append(nid)
+        # --- Step 2: Compute vertical footprint for each node ---
+        # Footprint = max(node_height, bins_height, sum_of_children_footprints)
+        BIN_LINE_H = 28  # vertical space per bin label
+        MIN_NODE_FOOT = NODE_H + NODE_GAP_Y
 
-        # Position each level
-        for lv, nodes_at_level in by_level.items():
-            x = GRAPH_PAD + lv * LEVEL_GAP_X
-            total_h = len(nodes_at_level) * NODE_H + (len(nodes_at_level) - 1) * NODE_GAP_Y
-            start_y = GRAPH_Y + GRAPH_PAD + (GRAPH_H - 2 * GRAPH_PAD - total_h) // 2
-            start_y = max(GRAPH_Y + GRAPH_PAD, start_y)
+        footprint: dict[str, float] = {}
 
-            for i, nid in enumerate(nodes_at_level):
-                y = start_y + i * (NODE_H + NODE_GAP_Y)
-                self._node_rects[nid] = pygame.Rect(x, y, NODE_W, NODE_H)
+        def calc_footprint(nid):
+            if nid in footprint:
+                return footprint[nid]
+            node = graph.nodes.get(nid)
+            n_bins = len([e for e in node.edges if e.target.startswith("BIN:")]) if node else 0
 
-        # Position bins (terminal edges) to the right of their source node
+            # Space needed for this node's bins
+            bins_h = max(0, n_bins) * BIN_LINE_H
+
+            # Space needed for children subtrees
+            child_ids = children.get(nid, [])
+            children_h = 0
+            for cid in child_ids:
+                children_h += calc_footprint(cid)
+            if child_ids:
+                children_h += (len(child_ids) - 1) * NODE_GAP_Y
+
+            footprint[nid] = max(MIN_NODE_FOOT, bins_h, children_h)
+            return footprint[nid]
+
+        calc_footprint(graph.root_id)
+        for nid in graph.nodes:
+            if nid not in footprint:
+                calc_footprint(nid)
+
+        # --- Step 3: Compute horizontal positions ---
+        # Scale levels to fit in graph area
+        n_levels = max_level + 1
+        available_w = GRAPH_W - 2 * GRAPH_PAD - NODE_W
+        level_gap = min(LEVEL_GAP_X, available_w // max(1, n_levels)) if n_levels > 1 else 0
+
+        # --- Step 4: Assign vertical positions top-down ---
+        # Root gets centered; children placed relative to parent
+        total_root_foot = footprint.get(graph.root_id, MIN_NODE_FOOT)
+        available_h = GRAPH_H - 2 * GRAPH_PAD
+        scale = min(1.0, available_h / total_root_foot) if total_root_foot > 0 else 1.0
+
+        def place_node(nid, x, y_start, y_end):
+            """Place nid centered in [y_start, y_end], then recurse into children."""
+            mid_y = (y_start + y_end) / 2
+            self._node_rects[nid] = pygame.Rect(
+                int(x), int(mid_y - NODE_H / 2), NODE_W, NODE_H
+            )
+
+            node = graph.nodes.get(nid)
+            if not node:
+                return
+
+            child_ids = children.get(nid, [])
+            if child_ids:
+                child_x = x + level_gap
+                total_cf = sum(footprint[c] for c in child_ids)
+                total_cf += (len(child_ids) - 1) * NODE_GAP_Y
+                child_top = mid_y - total_cf * scale / 2
+                for cid in child_ids:
+                    cf = footprint[cid] * scale
+                    place_node(cid, child_x, child_top, child_top + cf)
+                    child_top += cf + NODE_GAP_Y * scale
+
+        root_top = GRAPH_Y + GRAPH_PAD + (available_h - total_root_foot * scale) / 2
+        root_bot = root_top + total_root_foot * scale
+        place_node(graph.root_id, GRAPH_PAD, root_top, root_bot)
+
+        # Place orphan nodes (not reachable from root)
+        orphan_y = GRAPH_Y + GRAPH_PAD
+        for nid in graph.nodes:
+            if nid not in self._node_rects:
+                self._node_rects[nid] = pygame.Rect(GRAPH_PAD, int(orphan_y), NODE_W, NODE_H)
+                orphan_y += MIN_NODE_FOOT
+
+        # --- Step 5: Position bins ---
         for nid, node in graph.nodes.items():
             bin_edges = [e for e in node.edges if e.target.startswith("BIN:")]
             if not bin_edges:
@@ -251,13 +316,21 @@ class FactoryFloorUI:
             src_rect = self._node_rects.get(nid)
             if not src_rect:
                 continue
-            bin_spacing = 35
-            total_h = (len(bin_edges) - 1) * bin_spacing
-            start_y = src_rect.centery - total_h // 2
+            n = len(bin_edges)
+            total_h = (n - 1) * BIN_LINE_H
+            start_y = src_rect.centery - total_h / 2
             for i, edge in enumerate(bin_edges):
-                bx = src_rect.right + 140
-                by = start_y + i * bin_spacing
+                bx = src_rect.right + 130
+                by = int(start_y + i * BIN_LINE_H)
                 self._bin_positions[f"{nid}:{edge.target}"] = (bx, by)
+
+        # --- Step 6: Clamp everything to graph area ---
+        min_y = GRAPH_Y + 5
+        max_y = GRAPH_Y + GRAPH_H - NODE_H - 5
+        for nid, rect in self._node_rects.items():
+            rect.y = max(min_y, min(max_y, rect.y))
+        for key, (bx, by) in list(self._bin_positions.items()):
+            self._bin_positions[key] = (bx, max(min_y, min(max_y, by)))
 
         self._layout_dirty = False
 
