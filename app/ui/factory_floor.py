@@ -430,6 +430,12 @@ class FactoryFloorUI:
         elif self.state == CONNECTING:
             self._handle_connecting_click()
 
+        # Suppress click for background UI when overlay is active
+        if self.state in (TRAINING, DIALOG_TEXT, DIALOG_SELECT):
+            self._bg_click_suppressed = True
+        else:
+            self._bg_click_suppressed = False
+
     def _spawn_flow_shapes(self, results):
         """Spawn animated shape thumbnails showing actual objects on actual paths."""
         graph = self.world.graph
@@ -821,10 +827,19 @@ class FactoryFloorUI:
             self._layout_graph()
 
         surface.fill(BG)
+
+        # Suppress background button clicks when overlay is active
+        saved_click = self._click_pos
+        if getattr(self, '_bg_click_suppressed', False):
+            self._click_pos = None
+
         self._draw_top_bar(surface)
         self._draw_graph(surface)
         self._draw_side_panel(surface)
         result = self._draw_bottom_bar(surface)
+
+        # Restore click for overlay use
+        self._click_pos = saved_click
 
         # Overlays
         if self.state == DIALOG_TEXT:
