@@ -63,6 +63,33 @@ RED = (200, 60, 60)
 SEPARATOR = (190, 185, 175)
 
 FLOW_SPEED = 150       # pixels per second
+
+
+class FloatingText:
+    """A text label that floats upward and fades out."""
+
+    __slots__ = ("x", "y", "text", "color", "t", "duration", "alive")
+
+    def __init__(self, x, y, text, color, duration=1.2):
+        self.x = float(x)
+        self.y = float(y)
+        self.text = text
+        self.color = color
+        self.t = 0.0
+        self.duration = duration
+        self.alive = True
+
+    def update(self, dt):
+        self.t += dt
+        self.y -= 30 * dt
+        if self.t >= self.duration:
+            self.alive = False
+
+    def draw(self, surface, font):
+        if not self.alive or self.t / self.duration > 0.85:
+            return
+        t = font.render(self.text, True, self.color)
+        surface.blit(t, (int(self.x), int(self.y)))
 THUMB_SIZE = 26        # shape thumbnail size
 BORDER_CORRECT = (40, 200, 40)
 BORDER_WRONG = (220, 50, 50)
@@ -150,6 +177,7 @@ class FactoryFloorUI:
 
         # Flow animation
         self._flow_shapes: list[FlowShape] = []
+        self._floating_texts: list[FloatingText] = []
 
         # Connecting state
         self._connect_from = None
@@ -352,10 +380,13 @@ class FactoryFloorUI:
                 self.tick_timer = 0
                 self._spawn_flow_shapes(results)
 
-        # Animate flow shapes
+        # Animate flow shapes and floating texts
         self._flow_shapes = [s for s in self._flow_shapes if s.alive]
         for shape in self._flow_shapes:
             shape.update(dt)
+        self._floating_texts = [ft for ft in self._floating_texts if ft.alive]
+        for ft in self._floating_texts:
+            ft.update(dt)
 
         # Status message timer
         if self._status_timer > 0:
@@ -447,6 +478,22 @@ class FactoryFloorUI:
                 fs = FlowShape(entry, root_rect.midleft, thumb, BORDER_TRANSIT)
                 fs.t = -i * 0.06
                 self._flow_shapes.append(fs)
+
+        # Floating money text at bins for correct/wrong
+        reward = self.world.economy.CORRECT_REWARD
+        penalty = self.world.economy.WRONG_PENALTY
+        for obj, bin_name in results.correct:
+            for key, (bx, by) in self._bin_positions.items():
+                if key.endswith(f"BIN:{bin_name}"):
+                    self._floating_texts.append(
+                        FloatingText(bx + 50, by - 5, f"+${reward:.0f}", (40, 220, 40)))
+                    break
+        for obj, pred_bin, true_cat in results.wrong:
+            for key, (bx, by) in self._bin_positions.items():
+                if key.endswith(f"BIN:{pred_bin}"):
+                    self._floating_texts.append(
+                        FloatingText(bx + 50, by - 5, f"-${penalty:.0f}", (220, 50, 50)))
+                    break
 
         # Dropped objects — fall off from where they were
         for obj, drop_nid in results.dropped_at:
@@ -890,6 +937,10 @@ class FactoryFloorUI:
         for fs in self._flow_shapes:
             fs.draw(surface)
 
+        # Floating money text
+        for ft in self._floating_texts:
+            ft.draw(surface, self.font)
+
         # Connecting mode indicator
         if self.state == CONNECTING and self._connect_from:
             msg = self.font.render(f"Click target node (from {self._connect_from})", True, ACCENT)
@@ -1118,9 +1169,16 @@ class FactoryFloorUI:
         title_color = (220, 220, 230)
         subtle = (160, 160, 170)
 
-        # Title
+        # Title + live coins
         t = self.font_lg.render(f"Training: {worker.name}", True, title_color)
         surface.blit(t, (W // 2 - t.get_width() // 2, 20))
+        coins = self.world.economy.coins
+        cpt = self.world.economy.coins_per_tick
+        ct = self.font.render(f"${coins:.0f}", True, (255, 220, 80))
+        surface.blit(ct, (W - 120, 8))
+        cpt_color = (40, 220, 40) if cpt > 0 else (220, 50, 50) if cpt < 0 else title_color
+        cpt_t = self.font_sm.render(f"{cpt:+.1f}/t", True, cpt_color)
+        surface.blit(cpt_t, (W - 120, 28))
 
         # Canvas
         canvas_rect = pygame.Rect(270, 70, CANVAS_SIZE, CANVAS_SIZE)
