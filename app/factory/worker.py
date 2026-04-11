@@ -174,7 +174,7 @@ class FactoryWorker:
         Adapts if needed (result is cached for subsequent calls).
         Returns *(class_name, confidence)*.
         """
-        if not self.class_names:
+        if not self.class_names or not self._support_set:
             return ("unknown", 0.0)
 
         if self._needs_readapt:
@@ -186,7 +186,10 @@ class FactoryWorker:
             probs = F.softmax(logits, dim=1)
             confidence, idx = probs.max(dim=1)
 
-        return self.class_names[idx.item()], confidence.item()
+        i = idx.item()
+        if i >= len(self.class_names):
+            return self.class_names[0], 0.0
+        return self.class_names[i], confidence.item()
 
     def predict_simulated(
         self, true_category: str, task_categories: list[str]
