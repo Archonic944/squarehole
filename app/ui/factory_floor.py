@@ -5,9 +5,16 @@ import random
 import pygame
 from collections import deque
 
-from app.ui.renderer import Renderer
 from app.ui.drawing_canvas import DrawingCanvas, CANVAS_SIZE
-from app.ui.game_objects import surface_to_tensor
+
+
+def surface_to_tensor(surface):
+    """Convert a pygame surface to a (3, H, W) normalized float tensor."""
+    import torch, numpy as np
+    arr = pygame.surfarray.array3d(surface)  # (W, H, 3)
+    arr = arr.transpose(1, 0, 2)  # (H, W, 3)
+    tensor = torch.from_numpy(arr.copy()).float() / 255.0
+    return tensor.permute(2, 0, 1)  # (3, H, W)
 
 # ---------------------------------------------------------------------------
 # Layout constants (1024x768)
