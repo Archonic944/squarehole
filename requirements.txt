@@ -1,0 +1,5 @@
+torch>=2.0
+learn2learn
+Pillow
+pygame
+numpy
