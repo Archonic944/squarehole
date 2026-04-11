@@ -65,6 +65,17 @@ SEPARATOR = (190, 185, 175)
 
 FLOW_SPEED = 150       # pixels per second
 
+# Radial menu
+RADIAL_RING_R = 65       # distance from node center to button center
+RADIAL_BUTTONS = [
+    # (key, label, radius, base_color, icon_fn_name, default_angle_deg)
+    ("train",       "Train Worker",     22, (80, 160, 80),   "_draw_icon_mallet",     -90),   # top
+    ("connect_node","Connect To Node",  16, (130, 140, 170), "_draw_icon_arrow_node",  -30),   # upper-right
+    ("connect_bin", "Connect To Bin",   16, (130, 160, 130), "_draw_icon_arrow_bin",    30),   # lower-right
+    ("remove",      "Remove Node",      13, (190, 100, 100), "_draw_icon_x",          150),   # lower-left
+    ("set_root",    "Set as Root",      14, (150, 150, 100), "_draw_icon_star",        210),   # left
+]
+
 
 class FloatingText:
     """A text label that floats upward and fades out."""
@@ -347,6 +358,7 @@ class FactoryFloorUI:
 
         # Click tracking
         self._click_pos = None
+        self._radial_hit = None
 
     def _init_fonts(self):
         if not self._fonts_ready:
@@ -686,12 +698,56 @@ class FactoryFloorUI:
     def _handle_idle_click(self):
         if not self._click_pos:
             return
-        # Check if clicked a node
+
+        mx, my = self._click_pos
+
+        # 1. If radial menu is showing and a button was hit, dispatch action
+        if self.selected_node and self._radial_hit:
+            hit = self._radial_hit
+            self._radial_hit = None
+            if hit == "train":
+                self._action_train()
+            elif hit == "connect_node":
+                self._action_connect()
+            elif hit == "connect_bin":
+                self._action_connect_to_bin()
+            elif hit == "set_root":
+                self._action_set_root()
+            elif hit == "remove":
+                self._action_remove_node()
+            return
+
+        # 2. If radial menu is showing, check if click is inside any radial
+        #    button area — consume click to prevent click-through
+        if self.selected_node and self.selected_node in self.world.graph.nodes:
+            node = self.world.graph.nodes[self.selected_node]
+            rect = self._node_rects.get(self.selected_node)
+            if rect:
+                cx = rect.centerx
+                cy = rect.centery
+                # Filter buttons (hide train if no worker, hide set_root if already root)
+                buttons = []
+                for b in RADIAL_BUTTONS:
+                    key = b[0]
+                    if key == "train" and not node.worker:
+                        continue
+                    if key == "set_root" and node.node_id == self.world.graph.root_id:
+                        continue
+                    buttons.append(b)
+                positions = self._compute_radial_positions(cx, cy, buttons)
+                for bx, by, key, label, radius, color, icon_fn_name in positions:
+                    dist = math.hypot(mx - bx, my - by)
+                    if dist <= radius:
+                        return  # consume click inside a radial button area
+
+        # 3. Check if clicked a node rect — select it
         for nid, rect in self._node_rects.items():
             if rect.collidepoint(self._click_pos):
                 self.selected_node = nid
+                self._radial_hit = None
                 return
-        # Clicked empty graph area — deselect
+
+        # 4. Clicked empty graph area — deselect
         graph_area = pygame.Rect(GRAPH_X, GRAPH_Y, GRAPH_W, GRAPH_H)
         if graph_area.collidepoint(self._click_pos):
             self.selected_node = None
@@ -1132,6 +1188,10 @@ class FactoryFloorUI:
             msg = self.font.render(f"Click target node (from {self._connect_from})", True, ACCENT)
             surface.blit(msg, (GRAPH_PAD, GRAPH_Y + GRAPH_H - 25))
 
+        # Radial context menu (drawn last for highest z-order)
+        if self.state == IDLE:
+            self._draw_radial_menu(surface)
+
     def _draw_side_panel(self, surface):
         panel_rect = pygame.Rect(SIDE_X, SIDE_Y, SIDE_W, GRAPH_H)
         pygame.draw.rect(surface, PANEL_BG, panel_rect)
@@ -1226,35 +1286,203 @@ class FactoryFloorUI:
             t = self.font_sm.render(f"Speed: {node.processing_speed} | Queue: {len(node.queue)}", True, (80, 80, 80))
             surface.blit(t, (BTN_X, y))
             y += 20
-
-            # Action buttons
-            if self._draw_btn(surface, y, "Train Worker", (80, 160, 80)):
-                self._action_train()
-            y += BTN_H + BTN_GAP
         else:
             t = self.font_sm.render("No worker assigned", True, (150, 100, 100))
             surface.blit(t, (BTN_X, y))
             y += 20
 
-        if self._draw_btn(surface, y, "Connect To Node...", (130, 140, 170)):
-            self._action_connect()
-        y += BTN_H + BTN_GAP
-
-        if self._draw_btn(surface, y, "Connect To Bin...", (130, 160, 130)):
-            self._action_connect_to_bin()
-        y += BTN_H + BTN_GAP
-
-        is_root = (node.node_id == self.world.graph.root_id)
-        if not is_root:
-            if self._draw_btn(surface, y, "Set as Root", (150, 150, 100)):
-                self._action_set_root()
-            y += BTN_H + BTN_GAP
-
-        if self._draw_btn(surface, y, "Remove Node", (190, 100, 100)):
-            self._action_remove_node()
-        y += BTN_H + BTN_GAP
-
         return y
+
+    def _compute_radial_positions(self, cx, cy, buttons):
+        """Compute radial button positions, adapting arc when near graph edges.
+
+        Returns list of (bx, by, key, label, radius, color, icon_fn_name).
+        """
+        if not buttons:
+            return []
+
+        max_btn_r = max(b[2] for b in buttons)
+        margin = RADIAL_RING_R + max_btn_r + 4
+
+        # Check which directions are blocked
+        space_left = cx - GRAPH_X
+        space_right = (GRAPH_X + GRAPH_W) - cx
+        space_up = cy - GRAPH_Y
+        space_down = (GRAPH_Y + GRAPH_H) - cy
+
+        blocked_left = space_left < margin
+        blocked_right = space_right < margin
+        blocked_up = space_up < margin
+        blocked_down = space_down < margin
+
+        any_blocked = blocked_left or blocked_right or blocked_up or blocked_down
+
+        if not any_blocked:
+            # Use default angles from button specs
+            result = []
+            for key, label, radius, color, icon_fn_name, angle_deg in buttons:
+                angle_rad = math.radians(angle_deg)
+                bx = cx + int(RADIAL_RING_R * math.cos(angle_rad))
+                by = cy + int(RADIAL_RING_R * math.sin(angle_rad))
+                result.append((bx, by, key, label, radius, color, icon_fn_name))
+            return result
+
+        # Find valid angular range by sampling every 5 degrees
+        valid_angles = []
+        for deg in range(0, 360, 5):
+            rad = math.radians(deg)
+            test_x = cx + RADIAL_RING_R * math.cos(rad)
+            test_y = cy + RADIAL_RING_R * math.sin(rad)
+            # Check if this point (plus max button radius + margin) fits in graph
+            if (test_x - max_btn_r - 2 >= GRAPH_X and
+                test_x + max_btn_r + 2 <= GRAPH_X + GRAPH_W and
+                test_y - max_btn_r - 2 >= GRAPH_Y and
+                test_y + max_btn_r + 2 <= GRAPH_Y + GRAPH_H):
+                valid_angles.append(deg)
+
+        if not valid_angles:
+            # Fallback: place at default angles anyway
+            result = []
+            for key, label, radius, color, icon_fn_name, angle_deg in buttons:
+                angle_rad = math.radians(angle_deg)
+                bx = cx + int(RADIAL_RING_R * math.cos(angle_rad))
+                by = cy + int(RADIAL_RING_R * math.sin(angle_rad))
+                result.append((bx, by, key, label, radius, color, icon_fn_name))
+            return result
+
+        # Distribute buttons evenly across the valid arc
+        n = len(buttons)
+        if n == 1:
+            # Use middle of valid arc
+            mid_deg = valid_angles[len(valid_angles) // 2]
+            spread = [mid_deg]
+        else:
+            arc_start = valid_angles[0]
+            arc_end = valid_angles[-1]
+            arc_span = arc_end - arc_start
+            if arc_span <= 0:
+                arc_span = 360
+            step = arc_span / (n - 1) if n > 1 else 0
+            spread = [arc_start + i * step for i in range(n)]
+
+        result = []
+        for i, (key, label, radius, color, icon_fn_name, _default_deg) in enumerate(buttons):
+            angle_rad = math.radians(spread[i])
+            bx = cx + int(RADIAL_RING_R * math.cos(angle_rad))
+            by = cy + int(RADIAL_RING_R * math.sin(angle_rad))
+            result.append((bx, by, key, label, radius, color, icon_fn_name))
+        return result
+
+    def _draw_radial_menu(self, surface):
+        """Draw the radial context menu around the selected node."""
+        self._radial_hit = None
+
+        if not self.selected_node:
+            return
+        if self.selected_node not in self.world.graph.nodes:
+            return
+
+        node = self.world.graph.nodes[self.selected_node]
+        rect = self._node_rects.get(self.selected_node)
+        if not rect:
+            return
+
+        cx = rect.centerx
+        cy = rect.centery
+
+        # Filter buttons based on node state
+        buttons = []
+        for b in RADIAL_BUTTONS:
+            key = b[0]
+            if key == "train" and not node.worker:
+                continue
+            if key == "set_root" and node.node_id == self.world.graph.root_id:
+                continue
+            buttons.append(b)
+
+        positions = self._compute_radial_positions(cx, cy, buttons)
+        if not positions:
+            return
+
+        mouse_pos = pygame.mouse.get_pos()
+        mx, my = mouse_pos
+
+        icon_fns = {
+            "_draw_icon_mallet": _draw_icon_mallet,
+            "_draw_icon_arrow_node": _draw_icon_arrow_node,
+            "_draw_icon_arrow_bin": _draw_icon_arrow_bin,
+            "_draw_icon_x": _draw_icon_x,
+            "_draw_icon_star": _draw_icon_star,
+        }
+
+        hovered_idx = None
+
+        for i, (bx, by, key, label, radius, color, icon_fn_name) in enumerate(positions):
+            dist_mouse = math.hypot(mx - bx, my - by)
+            is_hover = dist_mouse <= radius
+
+            if is_hover:
+                hovered_idx = i
+
+            # 1. Drop shadow
+            shadow_surf = pygame.Surface((radius * 2 + 8, radius * 2 + 8), pygame.SRCALPHA)
+            pygame.draw.circle(shadow_surf, (0, 0, 0, 60),
+                               (radius + 4, radius + 4), radius)
+            surface.blit(shadow_surf, (bx - radius - 4 + 2, by - radius - 4 + 2))
+
+            # 2. Filled circle (lighten by 25 on hover)
+            if is_hover:
+                draw_color = (min(255, color[0] + 25),
+                              min(255, color[1] + 25),
+                              min(255, color[2] + 25))
+            else:
+                draw_color = color
+            pygame.draw.circle(surface, draw_color, (bx, by), radius)
+
+            # 3. Dark border (2px)
+            pygame.draw.circle(surface, (40, 40, 40), (bx, by), radius, 2)
+
+            # 4. Draw icon
+            icon_fn = icon_fns.get(icon_fn_name)
+            if icon_fn:
+                icon_fn(surface, bx, by, radius)
+
+            # 5. Check if mouse click hit this button
+            if is_hover and self._click_pos:
+                click_dist = math.hypot(self._click_pos[0] - bx,
+                                        self._click_pos[1] - by)
+                if click_dist <= radius:
+                    self._radial_hit = key
+
+        # 6. Tooltip for hovered button
+        if hovered_idx is not None:
+            bx, by, key, label, radius, color, icon_fn_name = positions[hovered_idx]
+            # Render tooltip text
+            tip_surf = self.font_sm.render(label, True, (255, 255, 255))
+            tw, th = tip_surf.get_size()
+            pad = 6
+            tip_w = tw + pad * 2
+            tip_h = th + pad * 2
+
+            # Position outward from node center
+            dx = bx - cx
+            dy = by - cy
+            dist = math.hypot(dx, dy)
+            if dist > 0:
+                nx, ny = dx / dist, dy / dist
+            else:
+                nx, ny = 0, -1
+            tip_x = int(bx + nx * (radius + 8)) - tip_w // 2
+            tip_y = int(by + ny * (radius + 8)) - tip_h // 2
+
+            # Clamp to graph bounds
+            tip_x = max(GRAPH_X + 2, min(tip_x, GRAPH_X + GRAPH_W - tip_w - 2))
+            tip_y = max(GRAPH_Y + 2, min(tip_y, GRAPH_Y + GRAPH_H - tip_h - 2))
+
+            # Draw tooltip background
+            tip_rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)
+            pygame.draw.rect(surface, (50, 50, 50), tip_rect, border_radius=4)
+            surface.blit(tip_surf, (tip_x + pad, tip_y + pad))
 
     def _draw_bottom_bar(self, surface):
         by = H - BOTTOM_H
