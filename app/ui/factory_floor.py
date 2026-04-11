@@ -405,6 +405,7 @@ class FactoryFloorUI:
                             new_name = self._training_new_class_input.strip()
                             if self._training_worker and new_name not in self._training_worker.class_names:
                                 self._training_worker.class_names.append(new_name)
+                                self._training_worker._rebuild_head()
                                 self._training_label_idx = len(self._training_worker.class_names) - 1
                             self._training_new_class_input = ""
                             self._training_typing_new_class = False
@@ -588,6 +589,7 @@ class FactoryFloorUI:
             return
 
         worker.class_names = [label_a, label_b]
+        worker._rebuild_head()
 
         node_id = f"node_{len(self.world.graph.nodes)}"
         self.world.graph.add_node(
