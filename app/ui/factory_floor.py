@@ -1199,6 +1199,42 @@ class FactoryFloorUI:
 
         y = SIDE_Y + 10
 
+        # Build buttons (side by side)
+        router_rect = pygame.Rect(BTN_X, y, 108, 38)
+        specialist_rect = pygame.Rect(BTN_X + 117, y, 108, 38)
+        if self._draw_btn_with_icon(surface, router_rect, "Router", (100, 150, 200), _draw_icon_router):
+            self._action_add_router()
+        if self._draw_btn_with_icon(surface, specialist_rect, "Specialist", (80, 160, 160), _draw_icon_specialist):
+            self._action_add_specialist()
+        y += 38 + 12
+
+        # Speed upgrade (pill shape)
+        cost = self.world.get_speed_upgrade_cost()
+        spd = self.world.speed_level
+        label = f"Spd {spd}\u2192{spd+1}  (${cost:.0f})"
+        can_afford = self.world.economy.can_afford(cost)
+        pill_color = (100, 170, 100) if can_afford else (140, 140, 140)
+        pill_rect = pygame.Rect(BTN_X, y, BTN_W, 34)
+        mouse = pygame.mouse.get_pos()
+        hover = pill_rect.collidepoint(mouse)
+        c = tuple(min(255, v + 25) for v in pill_color) if hover else pill_color
+        pygame.draw.rect(surface, c, pill_rect, border_radius=17)
+        border_color = tuple(max(0, v - 40) for v in pill_color)
+        pygame.draw.rect(surface, border_color, pill_rect, 2, border_radius=17)
+        t = self.font_sm.render(label, True, TEXT_DARK)
+        tx = pill_rect.x + (pill_rect.width - t.get_width()) // 2
+        ty = pill_rect.y + (pill_rect.height - t.get_height()) // 2
+        surface.blit(t, (tx, ty))
+        if self._click_pos is not None and pill_rect.collidepoint(self._click_pos):
+            if self.world.buy_speed_upgrade():
+                self._show_status(f"Speed upgraded to Lv.{self.world.speed_level}!")
+        y += 34 + 10
+
+        # Separator
+        pygame.draw.line(surface, SEPARATOR, (BTN_X, y), (BTN_X + BTN_W, y), 1)
+        y += 10
+
+        # Node info
         if self.selected_node and self.selected_node in self.world.graph.nodes:
             node = self.world.graph.nodes[self.selected_node]
             y = self._draw_node_info(surface, node, y)
@@ -1212,32 +1248,7 @@ class FactoryFloorUI:
         pygame.draw.line(surface, SEPARATOR, (BTN_X, y), (BTN_X + BTN_W, y), 1)
         y += 10
 
-        # Global actions
-        if self._draw_btn(surface, y, "Add Router Node", (100, 150, 200)):
-            self._action_add_router()
-        y += BTN_H + BTN_GAP
-
-        if self._draw_btn(surface, y, "Add Specialist Node", (100, 150, 200)):
-            self._action_add_specialist()
-        y += BTN_H + BTN_GAP
-
-        # Speed upgrade
-        y += 5
-        cost = self.world.get_speed_upgrade_cost()
-        spd = self.world.speed_level
-        label = f"Speed Lv.{spd} → {spd+1}  (${cost:.0f})"
-        can_afford = self.world.economy.can_afford(cost)
-        color = (100, 170, 100) if can_afford else (120, 120, 120)
-        if self._draw_btn(surface, y, label, color):
-            if self.world.buy_speed_upgrade():
-                self._show_status(f"Speed upgraded to Lv.{self.world.speed_level}!")
-        y += BTN_H + BTN_GAP
-
         # Factory stats
-        y += 5
-        pygame.draw.line(surface, SEPARATOR, (BTN_X, y), (BTN_X + BTN_W, y), 1)
-        y += 10
-
         stats = self.world.get_stats()
         for label, val in [
             ("Workers", str(stats["num_workers"])),
@@ -1780,6 +1791,25 @@ class FactoryFloorUI:
         pygame.draw.rect(surface, (0, 0, 0), rect, 1, border_radius=5)
         t = self.font_sm.render(text, True, TEXT_DARK)
         tx = rect.x + (rect.width - t.get_width()) // 2
+        ty = rect.y + (rect.height - t.get_height()) // 2
+        surface.blit(t, (tx, ty))
+        return self._click_pos is not None and rect.collidepoint(self._click_pos)
+
+    def _draw_btn_with_icon(self, surface, rect, text, color, icon_fn):
+        """Draw a button with a small icon to the left of the text. Returns True if clicked."""
+        mouse = pygame.mouse.get_pos()
+        hover = rect.collidepoint(mouse)
+        c = tuple(min(255, v + 25) for v in color) if hover else color
+        pygame.draw.rect(surface, c, rect, border_radius=6)
+        pygame.draw.rect(surface, (0, 0, 0), rect, 1, border_radius=6)
+        # Icon on the left
+        icon_size = min(rect.height - 8, 18)
+        icon_cx = rect.x + 6 + icon_size // 2
+        icon_cy = rect.y + rect.height // 2
+        icon_fn(surface, icon_cx, icon_cy, icon_size, color=TEXT_DARK)
+        # Text to the right of icon
+        t = self.font_sm.render(text, True, TEXT_DARK)
+        tx = rect.x + 6 + icon_size + 6
         ty = rect.y + (rect.height - t.get_height()) // 2
         surface.blit(t, (tx, ty))
         return self._click_pos is not None and rect.collidepoint(self._click_pos)
