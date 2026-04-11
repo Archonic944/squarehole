@@ -105,6 +105,145 @@ def _tensor_to_thumb(tensor):
     return pygame.transform.smoothscale(surf, (THUMB_SIZE, THUMB_SIZE))
 
 
+# ---------------------------------------------------------------------------
+# Icon drawing helpers (SVG-style procedural icons)
+# ---------------------------------------------------------------------------
+
+def _draw_icon_mallet(surface, cx, cy, r, color=(255, 255, 255)):
+    """Train Worker — a mallet: diagonal handle with rectangular head."""
+    # Handle: lower-left to upper-right area
+    hx1 = cx - int(r * 0.45)
+    hy1 = cy + int(r * 0.45)
+    hx2 = cx + int(r * 0.15)
+    hy2 = cy - int(r * 0.15)
+    pygame.draw.line(surface, color, (hx1, hy1), (hx2, hy2), 3)
+    # Head: filled rectangle rotated ~45 degrees at the top of the handle
+    hw = r * 0.45  # half-width of head
+    hh = r * 0.15  # half-height of head
+    angle = math.radians(45)
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+    # Center of the head, slightly past the handle end
+    mx = cx + int(r * 0.25)
+    my = cy - int(r * 0.25)
+    corners = []
+    for dx, dy in [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]:
+        rx = dx * cos_a - dy * sin_a
+        ry = dx * sin_a + dy * cos_a
+        corners.append((mx + int(rx), my + int(ry)))
+    pygame.draw.polygon(surface, color, corners)
+
+
+def _draw_icon_arrow_node(surface, cx, cy, r, color=(255, 255, 255)):
+    """Connect To Node — horizontal arrow with a small square at destination."""
+    # Horizontal arrow from left toward right
+    x1 = cx - int(r * 0.5)
+    x2 = cx + int(r * 0.25)
+    pygame.draw.line(surface, color, (x1, cy), (x2, cy), 2)
+    # Arrowhead
+    ah = int(r * 0.2)
+    pygame.draw.polygon(surface, color, [
+        (x2 + ah, cy),
+        (x2 - 1, cy - ah),
+        (x2 - 1, cy + ah),
+    ])
+    # Small outlined square at the destination end
+    sq = int(r * 0.22)
+    sx = cx + int(r * 0.5) - sq
+    sy = cy - sq
+    pygame.draw.rect(surface, color, (sx, sy, sq * 2, sq * 2), 2)
+
+
+def _draw_icon_arrow_bin(surface, cx, cy, r, color=(255, 255, 255)):
+    """Connect To Bin — downward arrow with open-top trapezoid/bucket below."""
+    # Vertical downward arrow
+    y1 = cy - int(r * 0.5)
+    y2 = cy + int(r * 0.05)
+    pygame.draw.line(surface, color, (cx, y1), (cx, y2), 2)
+    # Arrowhead
+    ah = int(r * 0.18)
+    pygame.draw.polygon(surface, color, [
+        (cx, y2 + ah),
+        (cx - ah, y2 - 1),
+        (cx + ah, y2 - 1),
+    ])
+    # Open-top trapezoid (bucket) — left side, bottom, right side
+    bw_top = int(r * 0.35)
+    bw_bot = int(r * 0.25)
+    bt = cy + int(r * 0.3)
+    bb = cy + int(r * 0.55)
+    pygame.draw.lines(surface, color, False, [
+        (cx - bw_top, bt),
+        (cx - bw_bot, bb),
+        (cx + bw_bot, bb),
+        (cx + bw_top, bt),
+    ], 2)
+
+
+def _draw_icon_x(surface, cx, cy, r, color=(255, 255, 255)):
+    """Remove Node — two crossing diagonal lines."""
+    d = int(r * 0.4)
+    pygame.draw.line(surface, color, (cx - d, cy - d), (cx + d, cy + d), 3)
+    pygame.draw.line(surface, color, (cx + d, cy - d), (cx - d, cy + d), 3)
+
+
+def _draw_icon_star(surface, cx, cy, r, color=(255, 255, 255)):
+    """Set as Root — 5-point star outline."""
+    outer_r = r * 0.55
+    inner_r = r * 0.22
+    points = []
+    for i in range(10):
+        angle = math.radians(-90 + i * 36)
+        rad = outer_r if i % 2 == 0 else inner_r
+        points.append((
+            cx + int(rad * math.cos(angle)),
+            cy + int(rad * math.sin(angle)),
+        ))
+    pygame.draw.polygon(surface, color, points, 2)
+
+
+def _draw_icon_play(surface, cx, cy, r, color=(255, 255, 255)):
+    """Play — right-pointing filled equilateral triangle."""
+    h = r * 0.5
+    pygame.draw.polygon(surface, color, [
+        (cx + int(h * 0.9), cy),
+        (cx - int(h * 0.5), cy - int(h * 0.8)),
+        (cx - int(h * 0.5), cy + int(h * 0.8)),
+    ])
+
+
+def _draw_icon_pause(surface, cx, cy, r, color=(255, 255, 255)):
+    """Pause — two vertical filled rectangles."""
+    bw = max(2, int(r * 0.15))
+    bh = int(r * 0.5)
+    gap = int(r * 0.15)
+    pygame.draw.rect(surface, color, (cx - gap - bw, cy - bh, bw, bh * 2))
+    pygame.draw.rect(surface, color, (cx + gap, cy - bh, bw, bh * 2))
+
+
+def _draw_icon_router(surface, cx, cy, r, color=(255, 255, 255)):
+    """Router — Y-shape rotated 90° (one line splitting into two)."""
+    # Stem from left to center
+    x1 = cx - int(r * 0.5)
+    xm = cx
+    pygame.draw.line(surface, color, (x1, cy), (xm, cy), 2)
+    # Upper branch
+    x2 = cx + int(r * 0.5)
+    yu = cy - int(r * 0.35)
+    pygame.draw.line(surface, color, (xm, cy), (x2, yu), 2)
+    # Lower branch
+    yd = cy + int(r * 0.35)
+    pygame.draw.line(surface, color, (xm, cy), (x2, yd), 2)
+
+
+def _draw_icon_specialist(surface, cx, cy, r, color=(255, 255, 255)):
+    """Specialist — horizontal line with a filled circle at the end."""
+    x1 = cx - int(r * 0.5)
+    x2 = cx + int(r * 0.3)
+    pygame.draw.line(surface, color, (x1, cy), (x2, cy), 2)
+    dot_r = max(3, int(r * 0.18))
+    pygame.draw.circle(surface, color, (x2 + dot_r + 1, cy), dot_r)
+
+
 class FlowShape:
     """An animated shape thumbnail that moves along an edge."""
 
