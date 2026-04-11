@@ -968,7 +968,7 @@ class FactoryFloorUI:
 
         # Back button
         back_rect = pygame.Rect(W - 250, by + 10, 65, 30)
-        if self._draw_btn_raw(surface, back_rect, "Menu", (150, 120, 100)):
+        if self._draw_btn_raw(surface, back_rect, "Quit", (150, 120, 100)):
             return "MENU"
 
         return None
