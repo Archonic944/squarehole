@@ -584,14 +584,95 @@ ALL_CONCEPTS = [
 
 
 # ---------------------------------------------------------------------------
-# Episode generation
+# Instance discrimination episodes (primary meta-training task)
+# ---------------------------------------------------------------------------
+
+def _make_shape_recipe():
+    """Create a random 'recipe' — a fixed shape type with fixed structural
+    params.  Each call to the recipe generates a new instance with varied
+    color, size, rotation, position (the surface features), but the same
+    underlying shape structure.  This is what the player does when they
+    draw 'circles' — same basic shape, varied presentation."""
+    fn = random.choice(ALL_SHAPE_FNS)
+    # Lock structural params for this recipe
+    fixed = {}
+    if fn in (shape_polygon,):
+        fixed["n_sides"] = random.randint(3, 10)
+        fixed["jitter"] = random.uniform(0.0, 0.3)
+    elif fn in (shape_star,):
+        fixed["n_points"] = random.randint(3, 8)
+    elif fn in (shape_blob,):
+        fixed["n_bumps"] = random.randint(3, 8)
+    elif fn in (shape_spiral,):
+        fixed["turns"] = random.uniform(1.5, 3.5)
+    elif fn in (shape_wave,):
+        fixed["periods"] = random.uniform(1.5, 4)
+    elif fn in (shape_cross,):
+        fixed["thickness_frac"] = random.uniform(0.2, 0.45)
+    elif fn in (shape_ellipse,):
+        fixed["aspect"] = random.uniform(0.3, 0.8)
+    elif fn in (shape_multi,):
+        fixed["count"] = random.randint(2, 5)
+
+    def make_instance():
+        # Vary presentation but keep structure
+        attrs = _sample_random_attrs(**fixed)
+        return fn, attrs
+
+    return make_instance
+
+
+def generate_instance_episode(n_support=5, n_query=5):
+    """Instance discrimination: tell apart two random shape recipes.
+
+    This is the primary meta-training task.  It mirrors what players do:
+    draw examples of two shape types, model learns to discriminate.
+    """
+    # Pick two DIFFERENT recipes
+    recipe_0 = _make_shape_recipe()
+    recipe_1 = _make_shape_recipe()
+    # Ensure they're actually different shape functions (retry a few times)
+    for _ in range(5):
+        if recipe_0 is not recipe_1:
+            break
+        recipe_1 = _make_shape_recipe()
+
+    support_imgs, support_labels = [], []
+    query_imgs, query_labels = [], []
+
+    for stage_imgs, stage_labels, count in [
+        (support_imgs, support_labels, n_support),
+        (query_imgs, query_labels, n_query),
+    ]:
+        for _ in range(count):
+            label = random.randint(0, 1)
+            shape_fn, attrs = recipe_0() if label == 0 else recipe_1()
+            img = render_image(shape_fn, attrs)
+            stage_imgs.append(img)
+            stage_labels.append(label)
+
+    return (
+        torch.stack(support_imgs),
+        torch.tensor(support_labels, dtype=torch.long),
+        torch.stack(query_imgs),
+        torch.tensor(query_labels, dtype=torch.long),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Episode generation (mixed: 80% instance discrimination, 20% concept)
 # ---------------------------------------------------------------------------
 
 def generate_episode(n_support=5, n_query=5):
-    """Generate a binary classification episode.
+    """Generate a meta-training episode.
 
-    Returns: (support_imgs, support_labels, query_imgs, query_labels)
+    80% of episodes are instance discrimination (tell apart two shape types).
+    20% are concept-based (abstract property like color, size, fill).
     """
+    if random.random() < 0.8:
+        return generate_instance_episode(n_support, n_query)
+
+    # Concept-based episode (keep for surface features the model CAN learn)
     concept_fn = random.choice(ALL_CONCEPTS)
     class_0_fn, class_1_fn = concept_fn()
 
