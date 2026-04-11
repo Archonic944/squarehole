@@ -1499,6 +1499,7 @@ class FactoryFloorUI:
         by = H - BOTTOM_H
         pygame.draw.rect(surface, BOTTOM_BG, (0, by, W, BOTTOM_H))
 
+        # -- Left side: info text (unchanged) --
         cats = self.world.active_categories
         cat_str = ", ".join(cats[:6])
         if len(cats) > 6:
@@ -1509,21 +1510,66 @@ class FactoryFloorUI:
         t = self.font_sm.render(f"Objects/tick: {self.world.objects_per_tick}", True, TEXT_LIGHT)
         surface.blit(t, (15, by + 28))
 
-        # Play/pause
+        mouse = pygame.mouse.get_pos()
+
+        # -- Right side: Quit button --
+        quit_rect = pygame.Rect(W - 175, by + 10, 55, 30)
+        quit_hover = quit_rect.collidepoint(mouse)
+        quit_color = (170, 140, 120) if quit_hover else (150, 120, 100)
+        pygame.draw.rect(surface, quit_color, quit_rect, border_radius=6)
+        pygame.draw.rect(surface, (80, 60, 50), quit_rect, 1, border_radius=6)
+        qt = self.font_sm.render("Quit", True, TEXT_LIGHT)
+        surface.blit(qt, (quit_rect.x + (quit_rect.width - qt.get_width()) // 2,
+                          quit_rect.y + (quit_rect.height - qt.get_height()) // 2))
+        if self._click_pos is not None and quit_rect.collidepoint(self._click_pos):
+            return "MENU"
+
+        # -- Status label --
         label = "Paused" if self.paused else "Running"
         color = RED if self.paused else GREEN
-        t = self.font.render(label, True, color)
-        surface.blit(t, (W - 160, by + 15))
+        lt = self.font_sm.render(label, True, color)
+        surface.blit(lt, (W - 110, by + 15))
 
-        pp_label = "Resume" if self.paused else "Pause"
-        pp_rect = pygame.Rect(W - 80, by + 10, 65, 30)
-        if self._draw_btn_raw(surface, pp_rect, pp_label, (100, 120, 150)):
-            self.paused = not self.paused
+        # -- Circular play/pause button --
+        circle_cx = W - 37
+        circle_cy = by + 25
+        circle_r = 18
 
-        # Back button
-        back_rect = pygame.Rect(W - 250, by + 10, 65, 30)
-        if self._draw_btn_raw(surface, back_rect, "Quit", (150, 120, 100)):
-            return "MENU"
+        circle_hover = (mouse[0] - circle_cx) ** 2 + (mouse[1] - circle_cy) ** 2 <= circle_r ** 2
+
+        if self.paused:
+            fill = (230, 80, 80) if circle_hover else (200, 60, 60)
+        else:
+            fill = (80, 195, 80) if circle_hover else (60, 170, 60)
+
+        # Drop shadow
+        shadow_surf = pygame.Surface((circle_r * 2 + 8, circle_r * 2 + 8), pygame.SRCALPHA)
+        pygame.draw.circle(shadow_surf, (0, 0, 0, 60),
+                           (circle_r + 2, circle_r + 2), circle_r)
+        surface.blit(shadow_surf, (circle_cx - circle_r - 2 + 2,
+                                   circle_cy - circle_r - 2 + 2))
+
+        # Filled circle + border
+        pygame.draw.circle(surface, fill, (circle_cx, circle_cy), circle_r)
+        pygame.draw.circle(surface, (40, 40, 40), (circle_cx, circle_cy), circle_r, 2)
+
+        # Icon
+        if self.paused:
+            _draw_icon_play(surface, circle_cx, circle_cy, circle_r)
+        else:
+            _draw_icon_pause(surface, circle_cx, circle_cy, circle_r)
+
+        # Click detection (distance check)
+        if self._click_pos is not None:
+            dx = self._click_pos[0] - circle_cx
+            dy = self._click_pos[1] - circle_cy
+            if dx * dx + dy * dy <= circle_r * circle_r:
+                self.paused = not self.paused
+
+        # -- Status message (timed) --
+        if self._status_timer > 0:
+            st = self.font.render(self._status_msg, True, (255, 200, 80))
+            surface.blit(st, (W // 2 - st.get_width() // 2, by + 15))
 
         return None
 
