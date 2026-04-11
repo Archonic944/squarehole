@@ -818,15 +818,13 @@ class FactoryFloorUI:
                         cat_name = edge.target[4:]
                         bt = self.font_sm.render(f"[{cat_name}]", True, (60, 120, 60))
                         surface.blit(bt, (bx, by))
-                        # Edge label positioned along its own line, not overlapping others
-                        if edge.output_label != cat_name:
-                            label_text = f"{edge.output_label} → {cat_name}"
-                        else:
-                            label_text = edge.output_label
-                        # Place label at 40% along the edge, offset above the line
-                        lx = int(start[0] + (end[0] - start[0]) * 0.4)
-                        ly = int(start[1] + (end[1] - start[1]) * 0.4) - 14
-                        lt = self.font_sm.render(label_text, True, (80, 80, 140))
+                        # Edge label: category name centered on line with background
+                        label_text = edge.output_label
+                        lt = self.font_sm.render(label_text, True, (70, 70, 130))
+                        lw, lh = lt.get_size()
+                        lx = int(start[0] + (end[0] - start[0]) * 0.5) - lw // 2
+                        ly = int(start[1] + (end[1] - start[1]) * 0.5) - lh // 2
+                        pygame.draw.rect(surface, BG, (lx - 3, ly - 1, lw + 6, lh + 2))
                         surface.blit(lt, (lx, ly))
                 elif edge.target in self._node_rects:
                     dst_rect = self._node_rects[edge.target]
@@ -846,11 +844,13 @@ class FactoryFloorUI:
                     pygame.draw.polygon(surface, EDGE_COLOR, [
                         (ax, ay), (ax - 8, ay - 5), (ax - 8, ay + 5)
                     ])
-                    # Edge label above the line
-                    mid_x = (start[0] + end[0]) // 2
-                    mid_y = min(start[1], end[1]) - 15
-                    lt = self.font_sm.render(edge.output_label, True, (80, 80, 140))
-                    surface.blit(lt, (mid_x - lt.get_width() // 2, mid_y))
+                    # Edge label centered on line with background
+                    lt = self.font_sm.render(edge.output_label, True, (70, 70, 130))
+                    lw, lh = lt.get_size()
+                    mid_x = (start[0] + end[0]) // 2 - lw // 2
+                    mid_y = (start[1] + end[1]) // 2 - lh // 2
+                    pygame.draw.rect(surface, BG, (mid_x - 3, mid_y - 1, lw + 6, lh + 2))
+                    surface.blit(lt, (mid_x, mid_y))
 
         # Draw nodes
         for nid, rect in self._node_rects.items():
