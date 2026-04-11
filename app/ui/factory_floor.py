@@ -101,6 +101,13 @@ class FloatingText:
             return
         t = font.render(self.text, True, self.color)
         surface.blit(t, (int(self.x), int(self.y)))
+
+    def draw_offset(self, surface, font, off_x, off_y):
+        if not self.alive or self.t / self.duration > 0.85:
+            return
+        t = font.render(self.text, True, self.color)
+        surface.blit(t, (int(self.x - off_x), int(self.y - off_y)))
+
 THUMB_SIZE = 26        # shape thumbnail size
 BORDER_CORRECT = (40, 200, 40)
 BORDER_WRONG = (220, 50, 50)
@@ -293,6 +300,18 @@ class FlowShape:
         pygame.draw.rect(surface, self.border,
                          (ix - 1, iy - 1, THUMB_SIZE + 2, THUMB_SIZE + 2), 2)
 
+    def draw_offset(self, surface, off_x, off_y):
+        if not self.alive or self.t < 0:
+            return
+        x, y = self.pos
+        x -= off_x
+        y -= off_y
+        half = THUMB_SIZE // 2
+        ix, iy = int(x) - half, int(y) - half
+        surface.blit(self.thumb, (ix, iy))
+        pygame.draw.rect(surface, self.border,
+                         (ix - 1, iy - 1, THUMB_SIZE + 2, THUMB_SIZE + 2), 2)
+
 
 # States
 IDLE = 0
@@ -463,6 +482,18 @@ class FactoryFloorUI:
         self._viewport_y = max(self._canvas_y,
                                min(self._canvas_y + self._canvas_h - GRAPH_H,
                                    self._viewport_y))
+
+    def _vx(self, virtual_x: float) -> int:
+        """Transform virtual canvas x to screen x."""
+        return int(virtual_x - self._viewport_x) + GRAPH_X
+
+    def _vy(self, virtual_y: float) -> int:
+        """Transform virtual canvas y to screen y."""
+        return int(virtual_y - self._viewport_y) + GRAPH_Y
+
+    def _screen_to_virtual(self, sx: int, sy: int) -> tuple[float, float]:
+        """Convert screen coords to virtual canvas coords."""
+        return (sx - GRAPH_X + self._viewport_x, sy - GRAPH_Y + self._viewport_y)
 
     # ------------------------------------------------------------------
     # Update
@@ -654,8 +685,8 @@ class FactoryFloorUI:
             node = self.world.graph.nodes[self.selected_node]
             rect = self._node_rects.get(self.selected_node)
             if rect:
-                cx = rect.centerx
-                cy = rect.centery
+                cx = self._vx(rect.centerx)
+                cy = self._vy(rect.centery)
                 buttons = []
                 for b in RADIAL_BUTTONS:
                     key = b[0]
@@ -680,9 +711,10 @@ class FactoryFloorUI:
                             self._action_remove_node()
                         return
 
-        # 2. Check if clicked a node rect — select it
+        # 2. Check if clicked a node rect — translate to virtual coords
+        vmx, vmy = self._screen_to_virtual(mx, my)
         for nid, rect in self._node_rects.items():
-            if rect.collidepoint(self._click_pos):
+            if rect.collidepoint(vmx, vmy):
                 self.selected_node = nid
                 return
 
@@ -694,8 +726,9 @@ class FactoryFloorUI:
     def _handle_connecting_click(self):
         if not self._click_pos:
             return
+        vmx, vmy = self._screen_to_virtual(*self._click_pos)
         for nid, rect in self._node_rects.items():
-            if rect.collidepoint(self._click_pos) and nid != self._connect_from:
+            if rect.collidepoint(vmx, vmy) and nid != self._connect_from:
                 output_label = self._pending_data.get("output_label", "???")
                 self.world.graph.connect(self._connect_from, output_label, nid)
                 self._layout_dirty = True
@@ -1016,6 +1049,10 @@ class FactoryFloorUI:
             surface.blit(msg, (GRAPH_W // 2 - msg.get_width() // 2, GRAPH_Y + GRAPH_H // 2))
             return
 
+        # Clip to graph area so nothing draws outside
+        surface.set_clip(pygame.Rect(GRAPH_X, GRAPH_Y, GRAPH_W, GRAPH_H))
+        vx, vy = self._vx, self._vy
+
         # Draw edges first (behind nodes)
         for nid, node in graph.nodes.items():
             src_rect = self._node_rects.get(nid)
@@ -1025,46 +1062,42 @@ class FactoryFloorUI:
                 if edge.target.startswith("BIN:"):
                     key = f"{nid}:{edge.target}"
                     if key in self._bin_positions:
-                        bx, by = self._bin_positions[key]
-                        # Spread edge start points vertically across the node
+                        bx_v, by_v = self._bin_positions[key]
                         bin_edges = [e for e in node.edges if e.target.startswith("BIN:")]
                         edge_i = bin_edges.index(edge)
                         n_bins = len(bin_edges)
                         y_spread = (edge_i - (n_bins - 1) / 2) * 10
-                        start = (src_rect.right, src_rect.centery + int(y_spread))
-                        end = (bx, by + 8)
+                        start = (vx(src_rect.right), vy(src_rect.centery + int(y_spread)))
+                        end = (vx(bx_v), vy(by_v + 8))
                         pygame.draw.line(surface, EDGE_COLOR, start, end, 2)
                         # Bin label
                         cat_name = edge.target[4:]
                         bt = self.font_sm.render(f"[{cat_name}]", True, (60, 120, 60))
-                        surface.blit(bt, (bx, by))
-                        # Edge label: category name centered on line with background
+                        surface.blit(bt, (vx(bx_v), vy(by_v)))
+                        # Edge label centered on line
                         label_text = edge.output_label
                         lt = self.font_sm.render(label_text, True, (70, 70, 130))
                         lw, lh = lt.get_size()
-                        lx = int(start[0] + (end[0] - start[0]) * 0.5) - lw // 2
-                        ly = int(start[1] + (end[1] - start[1]) * 0.5) - lh // 2
+                        lx = (start[0] + end[0]) // 2 - lw // 2
+                        ly = (start[1] + end[1]) // 2 - lh // 2
                         pygame.draw.rect(surface, BG, (lx - 3, ly - 1, lw + 6, lh + 2))
                         surface.blit(lt, (lx, ly))
                 elif edge.target in self._node_rects:
                     dst_rect = self._node_rects[edge.target]
-                    # Offset start/end vertically if multiple edges between same pair
-                    edges_to_target = [e for e in node.edges
-                                       if e.target == edge.target or
-                                       (not e.target.startswith("BIN:") and e.target in self._node_rects)]
                     edge_idx = next((i for i, e in enumerate(
                         [e for e in node.edges if not e.target.startswith("BIN:")]) if e is edge), 0)
-                    y_off = (edge_idx - len([e for e in node.edges if not e.target.startswith("BIN:")]) / 2) * 12
+                    n_node_edges = len([e for e in node.edges if not e.target.startswith("BIN:")])
+                    y_off = (edge_idx - n_node_edges / 2) * 12
 
-                    start = (src_rect.right, src_rect.centery + int(y_off))
-                    end = (dst_rect.left, dst_rect.centery + int(y_off))
+                    start = (vx(src_rect.right), vy(src_rect.centery + int(y_off)))
+                    end = (vx(dst_rect.left), vy(dst_rect.centery + int(y_off)))
                     pygame.draw.line(surface, EDGE_COLOR, start, end, 2)
                     # Arrow head
                     ax, ay = end
                     pygame.draw.polygon(surface, EDGE_COLOR, [
                         (ax, ay), (ax - 8, ay - 5), (ax - 8, ay + 5)
                     ])
-                    # Edge label centered on line with background
+                    # Edge label
                     lt = self.font_sm.render(edge.output_label, True, (70, 70, 130))
                     lw, lh = lt.get_size()
                     mid_x = (start[0] + end[0]) // 2 - lw // 2
@@ -1077,8 +1110,8 @@ class FactoryFloorUI:
             node = graph.nodes.get(nid)
             if not node:
                 continue
+            screen_rect = pygame.Rect(vx(rect.x), vy(rect.y), rect.w, rect.h)
 
-            # Fill color
             is_selected = (nid == self.selected_node)
             if is_selected:
                 fill = NODE_SELECTED
@@ -1087,47 +1120,47 @@ class FactoryFloorUI:
             else:
                 fill = NODE_EMPTY
 
-            pygame.draw.rect(surface, fill, rect, border_radius=6)
-            pygame.draw.rect(surface, (0, 0, 0), rect, 2, border_radius=6)
+            pygame.draw.rect(surface, fill, screen_rect, border_radius=6)
+            pygame.draw.rect(surface, (0, 0, 0), screen_rect, 2, border_radius=6)
 
-            # Root indicator
             if nid == graph.root_id:
-                pygame.draw.circle(surface, ACCENT, (rect.left + 10, rect.top + 10), 5)
+                pygame.draw.circle(surface, ACCENT, (screen_rect.left + 10, screen_rect.top + 10), 5)
 
-            # Node text
             if node.worker:
                 name_t = self.font_sm.render(node.worker.name[:18], True, TEXT_DARK)
-                surface.blit(name_t, (rect.x + 5, rect.y + 5))
-
+                surface.blit(name_t, (screen_rect.x + 5, screen_rect.y + 5))
                 acc = node.worker.cached_accuracy * 100
                 spd = node.processing_speed
                 info = f"{acc:.0f}% spd={spd}"
                 info_t = self.font_sm.render(info, True, (80, 80, 80))
-                surface.blit(info_t, (rect.x + 5, rect.y + 22))
-
-                # Queue indicator
+                surface.blit(info_t, (screen_rect.x + 5, screen_rect.y + 22))
                 qlen = len(node.queue)
                 if qlen > 0:
                     q_t = self.font_sm.render(f"q:{qlen}", True, RED if qlen > 5 else (100, 100, 100))
-                    surface.blit(q_t, (rect.x + 5, rect.y + 37))
+                    surface.blit(q_t, (screen_rect.x + 5, screen_rect.y + 37))
             else:
                 name_t = self.font_sm.render(nid, True, (120, 120, 120))
-                surface.blit(name_t, (rect.x + 5, rect.y + 18))
+                surface.blit(name_t, (screen_rect.x + 5, screen_rect.y + 18))
 
         # Flow shapes
+        off_x = self._viewport_x - GRAPH_X
+        off_y = self._viewport_y - GRAPH_Y
         for fs in self._flow_shapes:
-            fs.draw(surface)
+            fs.draw_offset(surface, off_x, off_y)
 
         # Floating money text
         for ft in self._floating_texts:
-            ft.draw(surface, self.font)
+            ft.draw_offset(surface, self.font, off_x, off_y)
 
         # Connecting mode indicator
         if self.state == CONNECTING and self._connect_from:
             msg = self.font.render(f"Click target node (from {self._connect_from})", True, ACCENT)
             surface.blit(msg, (GRAPH_PAD, GRAPH_Y + GRAPH_H - 25))
 
-        # Radial context menu (drawn last for highest z-order)
+        # Remove clip
+        surface.set_clip(None)
+
+        # Radial context menu (drawn after clip removed so it can extend outside graph)
         if self.state == IDLE:
             self._draw_radial_menu(surface)
 
@@ -1345,8 +1378,8 @@ class FactoryFloorUI:
         if not rect:
             return
 
-        cx = rect.centerx
-        cy = rect.centery
+        cx = self._vx(rect.centerx)
+        cy = self._vy(rect.centery)
 
         # Filter buttons based on node state
         buttons = []
