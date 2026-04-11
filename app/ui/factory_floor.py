@@ -36,7 +36,7 @@ SIDE_Y = TOP_H
 
 NODE_W = 140
 NODE_H = 50
-LEVEL_GAP_X = 180  # horizontal distance between tree levels
+LEVEL_GAP_X = 260  # horizontal distance between tree levels
 NODE_GAP_Y = 12    # vertical gap between nodes at same level
 GRAPH_PAD = 30      # padding inside graph area
 
@@ -260,14 +260,14 @@ class FlowShape:
 
     __slots__ = ("sx", "sy", "ex", "ey", "thumb", "border", "t", "duration", "alive")
 
-    def __init__(self, start, end, thumb_surface, border_color=BORDER_TRANSIT):
+    def __init__(self, start, end, thumb_surface, border_color=BORDER_TRANSIT, speed_mult=1):
         self.sx, self.sy = float(start[0]), float(start[1])
         self.ex, self.ey = float(end[0]), float(end[1])
         self.thumb = thumb_surface
         self.border = border_color
         self.t = 0.0
         dist = math.hypot(self.ex - self.sx, self.ey - self.sy)
-        self.duration = max(0.2, dist / FLOW_SPEED)
+        self.duration = max(0.1, dist / (FLOW_SPEED * speed_mult))
         self.alive = True
 
     def update(self, dt):
@@ -313,7 +313,7 @@ class FactoryFloorUI:
         self._status_msg = ""
         self._status_timer = 0.0
         self.tick_timer = 0.0
-        self.tick_interval = 1.5  # seconds between ticks — one shape at a time
+        self.base_tick_interval = 1.5  # seconds between ticks at speed level 1
 
         # Fonts (initialized on first draw since pygame must be init'd)
         self._fonts_ready = False
@@ -439,7 +439,11 @@ class FactoryFloorUI:
             if child_ids:
                 children_h += (len(child_ids) - 1) * NODE_GAP_Y
 
-            footprint[nid] = max(MIN_NODE_FOOT, bins_h, children_h)
+            # When node has both bins and children, need vertical space for both
+            if n_bins > 0 and child_ids:
+                footprint[nid] = max(MIN_NODE_FOOT, bins_h + children_h + NODE_GAP_Y)
+            else:
+                footprint[nid] = max(MIN_NODE_FOOT, bins_h, children_h)
             return footprint[nid]
 
         calc_footprint(graph.root_id)
@@ -472,10 +476,15 @@ class FactoryFloorUI:
 
             child_ids = children.get(nid, [])
             if child_ids:
+                n_bins = len([e for e in node.edges if e.target.startswith("BIN:")])
                 child_x = x + level_gap
                 total_cf = sum(footprint[c] for c in child_ids)
                 total_cf += (len(child_ids) - 1) * NODE_GAP_Y
                 child_top = mid_y - total_cf * scale / 2
+                if n_bins > 0:
+                    # Shift children upward to leave room for bins below
+                    bins_h = n_bins * BIN_LINE_H
+                    child_top -= (bins_h + NODE_GAP_Y) * scale / 2
                 for cid in child_ids:
                     cf = footprint[cid] * scale
                     place_node(cid, child_x, child_top, child_top + cf)
@@ -500,11 +509,22 @@ class FactoryFloorUI:
             src_rect = self._node_rects.get(nid)
             if not src_rect:
                 continue
+            child_ids = children.get(nid, [])
             n = len(bin_edges)
             total_h = (n - 1) * BIN_LINE_H
-            start_y = src_rect.centery - total_h / 2
+            if child_ids:
+                # Place bins at the same x-column as children, below them
+                bx = src_rect.x + level_gap
+                lowest_bottom = max(
+                    (self._node_rects[cid].bottom
+                     for cid in child_ids if cid in self._node_rects),
+                    default=src_rect.centery,
+                )
+                start_y = lowest_bottom + NODE_GAP_Y
+            else:
+                bx = src_rect.right + 100
+                start_y = src_rect.centery - total_h / 2
             for i, edge in enumerate(bin_edges):
-                bx = src_rect.right + 130
                 by = int(start_y + i * BIN_LINE_H)
                 self._bin_positions[f"{nid}:{edge.target}"] = (bx, by)
 
@@ -530,8 +550,9 @@ class FactoryFloorUI:
 
         # Auto-tick (only if factory has a root node)
         if not self.paused and self.world.graph.root_id:
+            tick_interval = self.base_tick_interval / self.world.speed_level
             self.tick_timer += dt
-            if self.tick_timer >= self.tick_interval:
+            if self.tick_timer >= tick_interval:
                 results = self.world.tick()
                 self.tick_timer = 0
                 self._spawn_flow_shapes(results)
@@ -592,6 +613,7 @@ class FactoryFloorUI:
         root_rect = self._node_rects.get(graph.root_id) if graph.root_id else None
         correct_set = set(id(o) for o, _ in results.correct)
         wrong_set = set(id(o) for o, _, _ in results.wrong)
+        speed_mult = self.world.speed_level
 
         # Show each actual flow: the real object on the real edge it traveled
         stagger = 0.0
@@ -624,9 +646,9 @@ class FactoryFloorUI:
             else:
                 continue
 
-            fs = FlowShape(src_rect.midright, dest, thumb, border)
+            fs = FlowShape(src_rect.midright, dest, thumb, border, speed_mult)
             fs.t = -stagger  # stagger so shapes don't overlap
-            stagger += 0.08
+            stagger += 0.08 / speed_mult
             self._flow_shapes.append(fs)
 
         # Objects entering the system from the left edge
@@ -638,8 +660,8 @@ class FactoryFloorUI:
                 thumb = _tensor_to_thumb(obj.tensor)
                 y_jitter = (i - len(all_entering[:5]) / 2) * (THUMB_SIZE + 4)
                 entry = (GRAPH_X + 2, root_rect.centery + int(y_jitter))
-                fs = FlowShape(entry, root_rect.midleft, thumb, BORDER_TRANSIT)
-                fs.t = -i * 0.06
+                fs = FlowShape(entry, root_rect.midleft, thumb, BORDER_TRANSIT, speed_mult)
+                fs.t = -i * 0.06 / speed_mult
                 self._flow_shapes.append(fs)
 
         # Floating money text at bins for correct/wrong
@@ -667,8 +689,8 @@ class FactoryFloorUI:
             # Fall downward from the node
             start = (src_rect.centerx + random.randint(-20, 20), src_rect.bottom)
             end = (start[0] + random.randint(-10, 10), start[1] + 120)
-            fs = FlowShape(start, end, thumb, BORDER_WRONG)
-            fs.duration = 0.8  # slow fall
+            fs = FlowShape(start, end, thumb, BORDER_WRONG, speed_mult)
+            fs.duration = 0.8 / speed_mult  # slow fall, scaled
             fs.t = random.uniform(-0.1, 0.0)
             self._flow_shapes.append(fs)
 
@@ -1355,9 +1377,9 @@ class FactoryFloorUI:
         # Distribute buttons evenly across the valid arc
         n = len(buttons)
         if n == 1:
-            # Use middle of valid arc
             mid_deg = valid_angles[len(valid_angles) // 2]
             spread = [mid_deg]
+            ring_r = RADIAL_RING_R
         else:
             arc_start = valid_angles[0]
             arc_end = valid_angles[-1]
@@ -1367,11 +1389,21 @@ class FactoryFloorUI:
             step = arc_span / (n - 1) if n > 1 else 0
             spread = [arc_start + i * step for i in range(n)]
 
+            # Check if buttons would overlap and increase ring radius if needed
+            ring_r = RADIAL_RING_R
+            min_chord = max_btn_r * 2 + 8  # diameter + gap
+            if step > 0:
+                # chord length between adjacent buttons at current ring_r
+                chord = 2 * ring_r * math.sin(math.radians(step / 2))
+                if chord < min_chord:
+                    # Increase ring_r so chord >= min_chord
+                    ring_r = int(min_chord / (2 * math.sin(math.radians(step / 2)))) + 1
+
         result = []
         for i, (key, label, radius, color, icon_fn_name, _default_deg) in enumerate(buttons):
             angle_rad = math.radians(spread[i])
-            bx = cx + int(RADIAL_RING_R * math.cos(angle_rad))
-            by = cy + int(RADIAL_RING_R * math.sin(angle_rad))
+            bx = cx + int(ring_r * math.cos(angle_rad))
+            by = cy + int(ring_r * math.sin(angle_rad))
             result.append((bx, by, key, label, radius, color, icon_fn_name))
         return result
 
