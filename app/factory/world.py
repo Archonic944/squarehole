@@ -34,6 +34,10 @@ class FactoryWorld:
     INITIAL_CATEGORIES: int = 4
     CATEGORY_UNLOCK_INTERVAL: int = 200  # ticks between new category unlocks
 
+    # Global speed upgrade
+    SPEED_UPGRADE_BASE_COST: float = 200.0
+    SPEED_UPGRADE_SCALE: float = 2.0  # each level costs 2x more
+
     def __init__(self, object_generator):
         self.object_generator = object_generator
         self.graph = RoutingGraph()
@@ -41,6 +45,7 @@ class FactoryWorld:
         self.workers: list[FactoryWorker] = []
         self.tick_count: int = 0
         self.objects_per_tick: int = 3
+        self.speed_level: int = 1  # global processing speed for all nodes
 
         # Start with the first INITIAL_CATEGORIES from the generator's pool
         all_cats = getattr(object_generator, "ALL_CATEGORIES", [])
@@ -72,7 +77,11 @@ class FactoryWorld:
             self.objects_per_tick, categories=self.active_categories
         )
 
-        # 2-3. Process routing graph (real inference for interactive play)
+        # 2. Apply global speed level to all nodes
+        for node in self.graph.nodes.values():
+            node.processing_speed = self.speed_level
+
+        # 3. Process routing graph (real inference for interactive play)
         results = self.graph.process_tick(new_objects, use_real_inference=True)
 
         # 4. Economy
@@ -155,6 +164,16 @@ class FactoryWorld:
         self.workers.append(worker)
         return worker
 
+    def get_speed_upgrade_cost(self) -> float:
+        return self.SPEED_UPGRADE_BASE_COST * (self.SPEED_UPGRADE_SCALE ** (self.speed_level - 1))
+
+    def buy_speed_upgrade(self) -> bool:
+        cost = self.get_speed_upgrade_cost()
+        if self.economy.spend(cost):
+            self.speed_level += 1
+            return True
+        return False
+
     def fire_worker(self, worker: FactoryWorker):
         """Remove a worker from the factory.
 
@@ -199,6 +218,7 @@ class FactoryWorld:
             "num_workers": len(self.workers),
             "active_categories": list(self.active_categories),
             "objects_per_tick": self.objects_per_tick,
+            "speed_level": self.speed_level,
             "nodes": len(self.graph.nodes),
             "workers": [
                 {

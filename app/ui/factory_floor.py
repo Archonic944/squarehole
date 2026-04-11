@@ -977,8 +977,20 @@ class FactoryFloorUI:
             self._action_add_specialist()
         y += BTN_H + BTN_GAP
 
+        # Speed upgrade
+        y += 5
+        cost = self.world.get_speed_upgrade_cost()
+        spd = self.world.speed_level
+        label = f"Speed Lv.{spd} → {spd+1}  (${cost:.0f})"
+        can_afford = self.world.economy.can_afford(cost)
+        color = (100, 170, 100) if can_afford else (120, 120, 120)
+        if self._draw_btn(surface, y, label, color):
+            if self.world.buy_speed_upgrade():
+                self._show_status(f"Speed upgraded to Lv.{self.world.speed_level}!")
+        y += BTN_H + BTN_GAP
+
         # Factory stats
-        y += 10
+        y += 5
         pygame.draw.line(surface, SEPARATOR, (BTN_X, y), (BTN_X + BTN_W, y), 1)
         y += 10
 
@@ -986,6 +998,7 @@ class FactoryFloorUI:
         for label, val in [
             ("Workers", str(stats["num_workers"])),
             ("Nodes", str(stats["nodes"])),
+            ("Speed", f"Lv.{stats.get('speed_level', 1)}"),
             ("Categories", str(len(stats["active_categories"]))),
             ("Tick", str(stats["tick_count"])),
         ]:
