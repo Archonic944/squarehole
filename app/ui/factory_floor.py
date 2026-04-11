@@ -251,12 +251,12 @@ class FactoryFloorUI:
             src_rect = self._node_rects.get(nid)
             if not src_rect:
                 continue
-            # Stack bins vertically, centered on the source node
-            total_h = len(bin_edges) * 20
+            bin_spacing = 35
+            total_h = (len(bin_edges) - 1) * bin_spacing
             start_y = src_rect.centery - total_h // 2
             for i, edge in enumerate(bin_edges):
-                bx = src_rect.right + 55
-                by = start_y + i * 20
+                bx = src_rect.right + 140
+                by = start_y + i * bin_spacing
                 self._bin_positions[f"{nid}:{edge.target}"] = (bx, by)
 
         self._layout_dirty = False
@@ -719,20 +719,28 @@ class FactoryFloorUI:
                     key = f"{nid}:{edge.target}"
                     if key in self._bin_positions:
                         bx, by = self._bin_positions[key]
-                        pygame.draw.line(surface, EDGE_COLOR, src_rect.midright, (bx, by + 8), 2)
-                        # Bin label with category
+                        # Spread edge start points vertically across the node
+                        bin_edges = [e for e in node.edges if e.target.startswith("BIN:")]
+                        edge_i = bin_edges.index(edge)
+                        n_bins = len(bin_edges)
+                        y_spread = (edge_i - (n_bins - 1) / 2) * 10
+                        start = (src_rect.right, src_rect.centery + int(y_spread))
+                        end = (bx, by + 8)
+                        pygame.draw.line(surface, EDGE_COLOR, start, end, 2)
+                        # Bin label
                         cat_name = edge.target[4:]
                         bt = self.font_sm.render(f"[{cat_name}]", True, (60, 120, 60))
                         surface.blit(bt, (bx, by))
-                        # Edge label: show "output → bin" if they differ
+                        # Edge label positioned along its own line, not overlapping others
                         if edge.output_label != cat_name:
                             label_text = f"{edge.output_label} → {cat_name}"
                         else:
                             label_text = edge.output_label
-                        mid_x = (src_rect.right + bx) // 2
-                        mid_y = (src_rect.centery + by + 8) // 2 - 10
+                        # Place label at 40% along the edge, offset above the line
+                        lx = int(start[0] + (end[0] - start[0]) * 0.4)
+                        ly = int(start[1] + (end[1] - start[1]) * 0.4) - 14
                         lt = self.font_sm.render(label_text, True, (80, 80, 140))
-                        surface.blit(lt, (mid_x - lt.get_width() // 2, mid_y))
+                        surface.blit(lt, (lx, ly))
                 elif edge.target in self._node_rects:
                     dst_rect = self._node_rects[edge.target]
                     # Offset start/end vertically if multiple edges between same pair
