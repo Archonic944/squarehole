@@ -7,6 +7,7 @@ import torch
 from collections import deque
 
 from app.ui.drawing_canvas import DrawingCanvas, CANVAS_SIZE
+from app.ui.graph_layout import ForceLayout
 
 
 def surface_to_tensor(surface):
@@ -36,8 +37,6 @@ SIDE_Y = TOP_H
 
 NODE_W = 140
 NODE_H = 50
-LEVEL_GAP_X = 260  # horizontal distance between tree levels
-NODE_GAP_Y = 12    # vertical gap between nodes at same level
 GRAPH_PAD = 30      # padding inside graph area
 
 # Side panel button layout
@@ -326,6 +325,15 @@ class FactoryFloorUI:
         self._bin_positions: dict[str, tuple[int, int]] = {}
         self._layout_dirty = True
 
+        # Viewport for virtual canvas (panning)
+        self._viewport_x = 0.0
+        self._viewport_y = 0.0
+        self._canvas_x = 0.0
+        self._canvas_y = 0.0
+        self._canvas_w = float(GRAPH_W)
+        self._canvas_h = float(GRAPH_H)
+        self._viewport_initialized = False
+
         # Flow animation
         self._flow_shapes: list[FlowShape] = []
         self._floating_texts: list[FloatingText] = []
@@ -371,172 +379,90 @@ class FactoryFloorUI:
     # ------------------------------------------------------------------
 
     def _layout_graph(self):
-        """Compute node positions using a tree layout that accounts for
-        each node's vertical footprint (bins, children, subtree size).
-        """
+        """Run force-directed simulation and store results."""
         self._node_rects.clear()
         self._bin_positions.clear()
 
         graph = self.world.graph
-        if not graph.root_id or graph.root_id not in graph.nodes:
-            for i, nid in enumerate(graph.nodes):
-                x = GRAPH_PAD
-                y = GRAPH_Y + GRAPH_PAD + i * (NODE_H + NODE_GAP_Y)
-                self._node_rects[nid] = pygame.Rect(x, y, NODE_W, NODE_H)
+        if not graph.nodes:
             self._layout_dirty = False
             return
 
-        # --- Step 1: BFS to assign tree levels ---
-        levels: dict[str, int] = {}
-        children: dict[str, list[str]] = {}  # node -> child node ids
-        q = deque([(graph.root_id, 0)])
-        visited = set()
-        max_level = 0
+        layout = ForceLayout(graph)
+        layout.run()
 
-        while q:
-            nid, level = q.popleft()
-            if nid in visited:
-                continue
-            visited.add(nid)
-            levels[nid] = level
-            max_level = max(max_level, level)
-            children[nid] = []
-
-            node = graph.nodes[nid]
-            for edge in node.edges:
-                t = edge.target
-                if not t.startswith("BIN:") and t in graph.nodes and t not in visited:
-                    children[nid].append(t)
-                    q.append((t, level + 1))
-
-        for nid in graph.nodes:
-            if nid not in levels:
-                max_level += 1
-                levels[nid] = max_level
-                children.setdefault(nid, [])
-
-        # --- Step 2: Compute vertical footprint for each node ---
-        # Footprint = max(node_height, bins_height, sum_of_children_footprints)
-        BIN_LINE_H = 28  # vertical space per bin label
-        MIN_NODE_FOOT = NODE_H + NODE_GAP_Y
-
-        footprint: dict[str, float] = {}
-
-        def calc_footprint(nid):
-            if nid in footprint:
-                return footprint[nid]
-            node = graph.nodes.get(nid)
-            n_bins = len([e for e in node.edges if e.target.startswith("BIN:")]) if node else 0
-
-            # Space needed for this node's bins
-            bins_h = max(0, n_bins) * BIN_LINE_H
-
-            # Space needed for children subtrees
-            child_ids = children.get(nid, [])
-            children_h = 0
-            for cid in child_ids:
-                children_h += calc_footprint(cid)
-            if child_ids:
-                children_h += (len(child_ids) - 1) * NODE_GAP_Y
-
-            # When node has both bins and children, need vertical space for both
-            if n_bins > 0 and child_ids:
-                footprint[nid] = max(MIN_NODE_FOOT, bins_h + children_h + NODE_GAP_Y)
-            else:
-                footprint[nid] = max(MIN_NODE_FOOT, bins_h, children_h)
-            return footprint[nid]
-
-        calc_footprint(graph.root_id)
-        for nid in graph.nodes:
-            if nid not in footprint:
-                calc_footprint(nid)
-
-        # --- Step 3: Compute horizontal positions ---
-        # Scale levels to fit in graph area
-        n_levels = max_level + 1
-        available_w = GRAPH_W - 2 * GRAPH_PAD - NODE_W
-        level_gap = min(LEVEL_GAP_X, available_w // max(1, n_levels)) if n_levels > 1 else 0
-
-        # --- Step 4: Assign vertical positions top-down ---
-        # Root gets centered; children placed relative to parent
-        total_root_foot = footprint.get(graph.root_id, MIN_NODE_FOOT)
-        available_h = GRAPH_H - 2 * GRAPH_PAD
-        scale = min(1.0, available_h / total_root_foot) if total_root_foot > 0 else 1.0
-
-        def place_node(nid, x, y_start, y_end):
-            """Place nid centered in [y_start, y_end], then recurse into children."""
-            mid_y = (y_start + y_end) / 2
-            self._node_rects[nid] = pygame.Rect(
-                int(x), int(mid_y - NODE_H / 2), NODE_W, NODE_H
-            )
-
-            node = graph.nodes.get(nid)
-            if not node:
-                return
-
-            child_ids = children.get(nid, [])
-            if child_ids:
-                n_bins = len([e for e in node.edges if e.target.startswith("BIN:")])
-                child_x = x + level_gap
-                total_cf = sum(footprint[c] for c in child_ids)
-                total_cf += (len(child_ids) - 1) * NODE_GAP_Y
-                child_top = mid_y - total_cf * scale / 2
-                if n_bins > 0:
-                    # Shift children upward to leave room for bins below
-                    bins_h = n_bins * BIN_LINE_H
-                    child_top -= (bins_h + NODE_GAP_Y) * scale / 2
-                for cid in child_ids:
-                    cf = footprint[cid] * scale
-                    place_node(cid, child_x, child_top, child_top + cf)
-                    child_top += cf + NODE_GAP_Y * scale
-
-        root_top = GRAPH_Y + GRAPH_PAD + (available_h - total_root_foot * scale) / 2
-        root_bot = root_top + total_root_foot * scale
-        place_node(graph.root_id, GRAPH_PAD, root_top, root_bot)
-
-        # Place orphan nodes (not reachable from root)
-        orphan_y = GRAPH_Y + GRAPH_PAD
-        for nid in graph.nodes:
-            if nid not in self._node_rects:
-                self._node_rects[nid] = pygame.Rect(GRAPH_PAD, int(orphan_y), NODE_W, NODE_H)
-                orphan_y += MIN_NODE_FOOT
-
-        # --- Step 5: Position bins ---
-        for nid, node in graph.nodes.items():
-            bin_edges = [e for e in node.edges if e.target.startswith("BIN:")]
-            if not bin_edges:
-                continue
-            src_rect = self._node_rects.get(nid)
-            if not src_rect:
-                continue
-            child_ids = children.get(nid, [])
-            n = len(bin_edges)
-            total_h = (n - 1) * BIN_LINE_H
-            if child_ids:
-                # Place bins at the same x-column as children, below them
-                bx = src_rect.x + level_gap
-                lowest_bottom = max(
-                    (self._node_rects[cid].bottom
-                     for cid in child_ids if cid in self._node_rects),
-                    default=src_rect.centery,
+        # Copy node positions to _node_rects (virtual canvas coords)
+        for nid, sn in layout.sim_nodes.items():
+            if not sn.is_bin:
+                self._node_rects[nid] = pygame.Rect(
+                    int(sn.x - sn.w / 2), int(sn.y - sn.h / 2),
+                    sn.w, sn.h,
                 )
-                start_y = lowest_bottom + NODE_GAP_Y
-            else:
-                bx = src_rect.right + 100
-                start_y = src_rect.centery - total_h / 2
-            for i, edge in enumerate(bin_edges):
-                by = int(start_y + i * BIN_LINE_H)
-                self._bin_positions[f"{nid}:{edge.target}"] = (bx, by)
 
-        # --- Step 6: Clamp everything to graph area ---
-        min_y = GRAPH_Y + 5
-        max_y = GRAPH_Y + GRAPH_H - NODE_H - 5
-        for nid, rect in self._node_rects.items():
-            rect.y = max(min_y, min(max_y, rect.y))
-        for key, (bx, by) in list(self._bin_positions.items()):
-            self._bin_positions[key] = (bx, max(min_y, min(max_y, by)))
+        # Copy bin positions to _bin_positions
+        for nid, sn in layout.sim_nodes.items():
+            if sn.is_bin:
+                self._bin_positions[nid] = (int(sn.x - sn.w / 2), int(sn.y - sn.h / 2))
+
+        # Compute virtual canvas bounds
+        self._compute_canvas_bounds()
+
+        # Center viewport on root on first layout
+        if not self._viewport_initialized:
+            self._center_viewport_on_root()
+            self._viewport_initialized = True
 
         self._layout_dirty = False
+
+    def _compute_canvas_bounds(self):
+        """Compute virtual canvas bounding box from all nodes + bins."""
+        margin = 60
+        all_rects = list(self._node_rects.values())
+        all_points = list(self._bin_positions.values())
+
+        if not all_rects and not all_points:
+            self._canvas_x = 0.0
+            self._canvas_y = 0.0
+            self._canvas_w = float(GRAPH_W)
+            self._canvas_h = float(GRAPH_H)
+            return
+
+        min_x = min((r.left for r in all_rects), default=0)
+        min_y = min((r.top for r in all_rects), default=0)
+        max_x = max((r.right for r in all_rects), default=0)
+        max_y = max((r.bottom for r in all_rects), default=0)
+
+        for bx, by in all_points:
+            min_x = min(min_x, bx)
+            min_y = min(min_y, by)
+            max_x = max(max_x, bx + 80)
+            max_y = max(max_y, by + 20)
+
+        self._canvas_x = min_x - margin
+        self._canvas_y = min_y - margin
+        self._canvas_w = max(float(GRAPH_W), (max_x - min_x) + 2 * margin)
+        self._canvas_h = max(float(GRAPH_H), (max_y - min_y) + 2 * margin)
+
+    def _center_viewport_on_root(self):
+        """Center viewport on the root node."""
+        graph = self.world.graph
+        if graph.root_id and graph.root_id in self._node_rects:
+            rect = self._node_rects[graph.root_id]
+            self._viewport_x = rect.centerx - GRAPH_W / 2
+            self._viewport_y = rect.centery - GRAPH_H / 2
+        else:
+            self._viewport_x = self._canvas_x
+            self._viewport_y = self._canvas_y
+        self._clamp_viewport()
+
+    def _clamp_viewport(self):
+        """Clamp viewport so it doesn't go outside canvas bounds."""
+        self._viewport_x = max(self._canvas_x,
+                               min(self._canvas_x + self._canvas_w - GRAPH_W,
+                                   self._viewport_x))
+        self._viewport_y = max(self._canvas_y,
+                               min(self._canvas_y + self._canvas_h - GRAPH_H,
+                                   self._viewport_y))
 
     # ------------------------------------------------------------------
     # Update
