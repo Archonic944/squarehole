@@ -25,11 +25,11 @@ class SimNode:
     vx: float = 0.0   # velocity
     vy: float = 0.0
     depth: int = 0     # BFS depth from root
-    # bins are not SimNodes — they're positioned post-simulation
+    is_bin: bool = False  # True for bin endpoints (smaller rect, no worker)
 
 class ForceLayout:
     nodes: list[SimNode]
-    edges: list[tuple[str, str]]  # (source_id, target_id) — non-bin edges only
+    edges: list[tuple[str, str]]  # (source_id, target_id) — includes bin edges
     # ... methods for running simulation
 ```
 
@@ -89,12 +89,9 @@ if overlap_x > 0 and overlap_y > 0:
         push on y-axis by overlap_y/2 each
 ```
 
-**Bin positioning (post-simulation):**
+**Bin nodes in simulation:**
 
-Bins are NOT force-simulated. After convergence:
-- For each node with bin edges: place bins at `(node.right + 60, node.centery +/- spread)`
-- Vertically spread bins around node center using `BIN_LINE_H = 28`
-- No child-node-awareness needed because the simulation already separated nodes
+Bins ARE simulated as nodes. Each bin edge (e.g., `"BIN:circle"`) becomes a SimNode with `is_bin=True` and `depth = parent_depth + 1`. They participate in all forces (repulsion, collision, edge springs, depth positioning) just like worker nodes. Their collision rect is smaller (just the label size, roughly 60x20) since they're rendered as text labels, not full node boxes. This means the simulation naturally finds non-overlapping positions for bins alongside child nodes.
 
 **Initial positions:**
 
