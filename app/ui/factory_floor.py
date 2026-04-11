@@ -573,7 +573,6 @@ class FactoryFloorUI:
         node_id = f"node_{len(self.world.graph.nodes)}"
         self.world.graph.add_node(
             node_id,
-            processing_speed=1,  # will update after training
             queue_capacity=10,
         )
         self.world.assign_worker(worker, node_id)
