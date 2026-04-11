@@ -358,7 +358,6 @@ class FactoryFloorUI:
 
         # Click tracking
         self._click_pos = None
-        self._radial_hit = None
 
     def _init_fonts(self):
         if not self._fonts_ready:
@@ -701,31 +700,14 @@ class FactoryFloorUI:
 
         mx, my = self._click_pos
 
-        # 1. If radial menu is showing and a button was hit, dispatch action
-        if self.selected_node and self._radial_hit:
-            hit = self._radial_hit
-            self._radial_hit = None
-            if hit == "train":
-                self._action_train()
-            elif hit == "connect_node":
-                self._action_connect()
-            elif hit == "connect_bin":
-                self._action_connect_to_bin()
-            elif hit == "set_root":
-                self._action_set_root()
-            elif hit == "remove":
-                self._action_remove_node()
-            return
-
-        # 2. If radial menu is showing, check if click is inside any radial
-        #    button area — consume click to prevent click-through
+        # 1. If radial menu is showing, check if click hit a radial button
+        #    and dispatch the action directly
         if self.selected_node and self.selected_node in self.world.graph.nodes:
             node = self.world.graph.nodes[self.selected_node]
             rect = self._node_rects.get(self.selected_node)
             if rect:
                 cx = rect.centerx
                 cy = rect.centery
-                # Filter buttons (hide train if no worker, hide set_root if already root)
                 buttons = []
                 for b in RADIAL_BUTTONS:
                     key = b[0]
@@ -738,16 +720,25 @@ class FactoryFloorUI:
                 for bx, by, key, label, radius, color, icon_fn_name in positions:
                     dist = math.hypot(mx - bx, my - by)
                     if dist <= radius:
-                        return  # consume click inside a radial button area
+                        if key == "train":
+                            self._action_train()
+                        elif key == "connect_node":
+                            self._action_connect()
+                        elif key == "connect_bin":
+                            self._action_connect_to_bin()
+                        elif key == "set_root":
+                            self._action_set_root()
+                        elif key == "remove":
+                            self._action_remove_node()
+                        return
 
-        # 3. Check if clicked a node rect — select it
+        # 2. Check if clicked a node rect — select it
         for nid, rect in self._node_rects.items():
             if rect.collidepoint(self._click_pos):
                 self.selected_node = nid
-                self._radial_hit = None
                 return
 
-        # 4. Clicked empty graph area — deselect
+        # 3. Clicked empty graph area — deselect
         graph_area = pygame.Rect(GRAPH_X, GRAPH_Y, GRAPH_W, GRAPH_H)
         if graph_area.collidepoint(self._click_pos):
             self.selected_node = None
@@ -1386,8 +1377,6 @@ class FactoryFloorUI:
 
     def _draw_radial_menu(self, surface):
         """Draw the radial context menu around the selected node."""
-        self._radial_hit = None
-
         if not self.selected_node:
             return
         if self.selected_node not in self.world.graph.nodes:
@@ -1458,14 +1447,7 @@ class FactoryFloorUI:
             if icon_fn:
                 icon_fn(surface, bx, by, radius)
 
-            # 5. Check if mouse click hit this button
-            if is_hover and self._click_pos:
-                click_dist = math.hypot(self._click_pos[0] - bx,
-                                        self._click_pos[1] - by)
-                if click_dist <= radius:
-                    self._radial_hit = key
-
-        # 6. Tooltip for hovered button
+        # 5. Tooltip for hovered button
         if hovered_idx is not None:
             bx, by, key, label, radius, color, icon_fn_name = positions[hovered_idx]
             # Render tooltip text
@@ -1565,11 +1547,6 @@ class FactoryFloorUI:
             dy = self._click_pos[1] - circle_cy
             if dx * dx + dy * dy <= circle_r * circle_r:
                 self.paused = not self.paused
-
-        # -- Status message (timed) --
-        if self._status_timer > 0:
-            st = self.font.render(self._status_msg, True, (255, 200, 80))
-            surface.blit(st, (W // 2 - st.get_width() // 2, by + 15))
 
         return None
 
@@ -1822,11 +1799,6 @@ class FactoryFloorUI:
     # ------------------------------------------------------------------
     # Button helpers
     # ------------------------------------------------------------------
-
-    def _draw_btn(self, surface, y, text, color):
-        """Draw a standard sidebar button. Returns True if clicked."""
-        rect = pygame.Rect(BTN_X, y, BTN_W, BTN_H)
-        return self._draw_btn_raw(surface, rect, text, color)
 
     def _draw_btn_raw(self, surface, rect, text, color):
         """Draw a button at arbitrary rect. Returns True if clicked."""
