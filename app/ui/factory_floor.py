@@ -731,7 +731,8 @@ class FactoryFloorUI:
             for i, obj in enumerate(all_entering[:5]):
                 thumb = _tensor_to_thumb(obj.tensor)
                 y_jitter = (i - len(all_entering[:5]) / 2) * (THUMB_SIZE + 4)
-                entry = (GRAPH_X + 2, root_rect.centery + int(y_jitter))
+                entry_x = self._viewport_x  # left edge of visible area
+                entry = (entry_x, root_rect.centery + int(y_jitter))
                 fs = FlowShape(entry, root_rect.midleft, thumb, BORDER_TRANSIT, speed_mult)
                 fs.t = -i * 0.06 / speed_mult
                 self._flow_shapes.append(fs)
