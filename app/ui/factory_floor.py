@@ -39,6 +39,11 @@ NODE_W = 140
 NODE_H = 50
 GRAPH_PAD = 30      # padding inside graph area
 
+# Minimap
+MINIMAP_MAX_W = 160
+MINIMAP_MAX_H = 120
+MINIMAP_PAD = 8
+
 # Side panel button layout
 BTN_W = 225
 BTN_H = 32
@@ -496,6 +501,104 @@ class FactoryFloorUI:
         return (sx - GRAPH_X + self._viewport_x, sy - GRAPH_Y + self._viewport_y)
 
     # ------------------------------------------------------------------
+    # Minimap
+    # ------------------------------------------------------------------
+
+    def _minimap_params(self) -> tuple[float, float, float, float, float] | None:
+        """Return (scale, mm_x, mm_y, mm_w, mm_h) or None if minimap not needed."""
+        if self._canvas_w <= GRAPH_W and self._canvas_h <= GRAPH_H:
+            return None
+        scale = min(MINIMAP_MAX_W / self._canvas_w, MINIMAP_MAX_H / self._canvas_h)
+        mm_w = self._canvas_w * scale
+        mm_h = self._canvas_h * scale
+        mm_x = GRAPH_X + GRAPH_W - mm_w - MINIMAP_PAD
+        mm_y = GRAPH_Y + MINIMAP_PAD
+        return (scale, mm_x, mm_y, mm_w, mm_h)
+
+    def _virtual_to_minimap(self, vx: float, vy: float,
+                            scale: float, mm_x: float, mm_y: float) -> tuple[int, int]:
+        """Convert virtual canvas coords to minimap pixel coords."""
+        mx = mm_x + (vx - self._canvas_x) * scale
+        my = mm_y + (vy - self._canvas_y) * scale
+        return (int(mx), int(my))
+
+    def _minimap_to_virtual(self, mx: float, my: float,
+                            scale: float, mm_x: float, mm_y: float) -> tuple[float, float]:
+        """Convert minimap pixel coords to virtual canvas coords."""
+        vx = self._canvas_x + (mx - mm_x) / scale
+        vy = self._canvas_y + (my - mm_y) / scale
+        return (vx, vy)
+
+    def _handle_minimap_click(self, mx, my) -> bool:
+        """Handle click on minimap. Returns True if click was consumed."""
+        params = self._minimap_params()
+        if not params:
+            return False
+        scale, mm_x, mm_y, mm_w, mm_h = params
+        if not (mm_x <= mx <= mm_x + mm_w and mm_y <= my <= mm_y + mm_h):
+            return False
+        cvx, cvy = self._minimap_to_virtual(mx, my, scale, mm_x, mm_y)
+        self._viewport_x = cvx - GRAPH_W / 2
+        self._viewport_y = cvy - GRAPH_H / 2
+        self._clamp_viewport()
+        return True
+
+    def _draw_minimap(self, surface):
+        """Draw the minimap thumbnail in the top-right corner."""
+        params = self._minimap_params()
+        if not params:
+            return
+        scale, mm_x, mm_y, mm_w, mm_h = params
+        v2m = lambda vx, vy: self._virtual_to_minimap(vx, vy, scale, mm_x, mm_y)
+
+        # Semi-transparent background
+        bg_surf = pygame.Surface((int(mm_w), int(mm_h)), pygame.SRCALPHA)
+        bg_surf.fill((240, 235, 225, 200))
+        surface.blit(bg_surf, (int(mm_x), int(mm_y)))
+        pygame.draw.rect(surface, (100, 100, 100),
+                         (int(mm_x), int(mm_y), int(mm_w), int(mm_h)), 1)
+
+        graph = self.world.graph
+
+        # Draw edges
+        for nid, node in graph.nodes.items():
+            src_rect = self._node_rects.get(nid)
+            if not src_rect:
+                continue
+            sx, sy = v2m(src_rect.centerx, src_rect.centery)
+            for edge in node.edges:
+                if edge.target.startswith("BIN:"):
+                    key = f"{nid}:{edge.target}"
+                    if key in self._bin_positions:
+                        bx, by = self._bin_positions[key]
+                        ex, ey = v2m(bx + 30, by + 10)
+                        pygame.draw.line(surface, (150, 150, 150), (sx, sy), (ex, ey), 1)
+                elif edge.target in self._node_rects:
+                    dst_rect = self._node_rects[edge.target]
+                    ex, ey = v2m(dst_rect.centerx, dst_rect.centery)
+                    pygame.draw.line(surface, (150, 150, 150), (sx, sy), (ex, ey), 1)
+
+        # Draw nodes as small rects
+        for nid, rect in self._node_rects.items():
+            nx, ny = v2m(rect.x, rect.y)
+            nw = max(3, int(rect.w * scale))
+            nh = max(2, int(rect.h * scale))
+            color = NODE_SELECTED if nid == self.selected_node else NODE_FILL
+            pygame.draw.rect(surface, color, (nx, ny, nw, nh))
+            pygame.draw.rect(surface, (0, 0, 0), (nx, ny, nw, nh), 1)
+
+        # Draw bins as green dots
+        for key, (bx, by) in self._bin_positions.items():
+            mx_b, my_b = v2m(bx, by)
+            pygame.draw.circle(surface, (60, 120, 60), (mx_b, my_b), 2)
+
+        # Viewport rectangle
+        vp_x1, vp_y1 = v2m(self._viewport_x, self._viewport_y)
+        vp_x2, vp_y2 = v2m(self._viewport_x + GRAPH_W, self._viewport_y + GRAPH_H)
+        pygame.draw.rect(surface, ACCENT,
+                         (vp_x1, vp_y1, vp_x2 - vp_x1, vp_y2 - vp_y1), 2)
+
+    # ------------------------------------------------------------------
     # Update
     # ------------------------------------------------------------------
 
@@ -504,6 +607,18 @@ class FactoryFloorUI:
         for e in events:
             if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
                 self._click_pos = e.pos
+
+        # Minimap drag — pan viewport when mouse is held on minimap
+        if pygame.mouse.get_pressed()[0]:
+            mmx, mmy = pygame.mouse.get_pos()
+            params = self._minimap_params()
+            if params:
+                scale, mm_x, mm_y, mm_w, mm_h = params
+                if mm_x <= mmx <= mm_x + mm_w and mm_y <= mmy <= mm_y + mm_h:
+                    cvx, cvy = self._minimap_to_virtual(mmx, mmy, scale, mm_x, mm_y)
+                    self._viewport_x = cvx - GRAPH_W / 2
+                    self._viewport_y = cvy - GRAPH_H / 2
+                    self._clamp_viewport()
 
         # Auto-tick (only if factory has a root node)
         if not self.paused and self.world.graph.root_id:
@@ -678,6 +793,10 @@ class FactoryFloorUI:
             return
 
         mx, my = self._click_pos
+
+        # 0. Check minimap click first
+        if self._handle_minimap_click(mx, my):
+            return
 
         # 1. If radial menu is showing, check if click hit a radial button
         #    and dispatch the action directly
@@ -1163,6 +1282,9 @@ class FactoryFloorUI:
         # Radial context menu (drawn after clip removed so it can extend outside graph)
         if self.state == IDLE:
             self._draw_radial_menu(surface)
+
+        # Minimap (drawn in screen coords, after clip removed)
+        self._draw_minimap(surface)
 
     def _draw_side_panel(self, surface):
         panel_rect = pygame.Rect(SIDE_X, SIDE_Y, SIDE_W, GRAPH_H)
