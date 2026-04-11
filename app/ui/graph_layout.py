@@ -249,8 +249,8 @@ class ForceLayout:
             for sn in self.sim_nodes.values():
                 sn.vx *= (1 - VELOCITY_DECAY)
                 sn.vy *= (1 - VELOCITY_DECAY)
-                dx = sn.vx
-                dy = sn.vy
+                dx = sn.vx * alpha
+                dy = sn.vy * alpha
                 sn.x += dx
                 sn.y += dy
                 max_disp = max(max_disp, abs(dx) + abs(dy))

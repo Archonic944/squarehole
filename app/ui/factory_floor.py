@@ -7,7 +7,7 @@ import torch
 from collections import deque
 
 from app.ui.drawing_canvas import DrawingCanvas, CANVAS_SIZE
-from app.ui.graph_layout import ForceLayout
+from app.ui.graph_layout import ForceLayout, BIN_W, BIN_H
 
 
 def surface_to_tensor(surface):
@@ -459,8 +459,8 @@ class FactoryFloorUI:
         for bx, by in all_points:
             min_x = min(min_x, bx)
             min_y = min(min_y, by)
-            max_x = max(max_x, bx + 80)
-            max_y = max(max_y, by + 20)
+            max_x = max(max_x, bx + BIN_W)
+            max_y = max(max_y, by + BIN_H)
 
         self._canvas_x = min_x - margin
         self._canvas_y = min_y - margin
