@@ -40,6 +40,9 @@ class TickResults:
     # (FactoryObject, from_node_id, target_str, prediction)
     # target_str is a node_id or "BIN:name"
 
+    dropped_at: list[tuple] = field(default_factory=list)
+    # (FactoryObject, node_id) — where each object fell off
+
 
 class RoutingNode:
     """A single node in the routing graph.
@@ -196,7 +199,9 @@ class RoutingGraph:
             # No worker — drop everything in this node's queue
             if node.worker is None:
                 while node.queue:
-                    results.dropped.append(node.queue.popleft())
+                    obj = node.queue.popleft()
+                    results.dropped.append(obj)
+                    results.dropped_at.append((obj, nid))
                 continue
 
             worker = node.worker
@@ -226,6 +231,7 @@ class RoutingGraph:
                 target = node.route(prediction)
                 if target is None:
                     results.dropped.append(obj)
+                    results.dropped_at.append((obj, nid))
                 elif target.startswith("BIN:"):
                     bin_name = target[4:]
                     results.flows.append((obj, nid, target, prediction))
@@ -242,8 +248,10 @@ class RoutingGraph:
                             results.flows.append((obj, nid, target, prediction))
                         else:
                             results.dropped.append(obj)
+                            results.dropped_at.append((obj, nid))
                     else:
                         results.dropped.append(obj)
+                        results.dropped_at.append((obj, nid))
 
         # Count objects still sitting in queues
         results.unprocessed = sum(len(n.queue) for n in self.nodes.values())

@@ -375,6 +375,20 @@ class FactoryFloorUI:
                 fs.t = -i * 0.06
                 self._flow_shapes.append(fs)
 
+        # Dropped objects — fall off from where they were
+        for obj, drop_nid in results.dropped_at:
+            src_rect = self._node_rects.get(drop_nid)
+            if not src_rect:
+                continue
+            thumb = _tensor_to_thumb(obj.tensor)
+            # Fall downward from the node
+            start = (src_rect.centerx + random.randint(-20, 20), src_rect.bottom)
+            end = (start[0] + random.randint(-10, 10), start[1] + 120)
+            fs = FlowShape(start, end, thumb, BORDER_WRONG)
+            fs.duration = 0.8  # slow fall
+            fs.t = random.uniform(-0.1, 0.0)
+            self._flow_shapes.append(fs)
+
         # Cap to prevent lag
         if len(self._flow_shapes) > 80:
             self._flow_shapes = self._flow_shapes[-60:]
