@@ -59,18 +59,11 @@ class RoutingNode:
         queue_capacity: int = 20,
     ):
         self.node_id = node_id
-        self.worker = worker  # primary worker (used for predictions)
-        self.extra_workers: list[FactoryWorker] = []  # parallel copies
+        self.worker = worker
         self.edges: list[RoutingEdge] = []
         self.queue: deque = deque()
         self.queue_capacity = queue_capacity
-
-    @property
-    def processing_speed(self) -> int:
-        """Speed = number of workers at this node."""
-        count = 1 if self.worker else 0
-        count += len(self.extra_workers)
-        return count
+        self.processing_speed: int = 1
 
     def route(self, prediction: str) -> str | None:
         """Return the target for *prediction*, or ``None`` if no edge matches."""
