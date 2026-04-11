@@ -47,23 +47,30 @@ class TickResults:
 class RoutingNode:
     """A single node in the routing graph.
 
-    Each node holds a worker (or ``None`` for pass-through/drop) and a queue
-    of objects waiting to be processed.
+    A node holds one or more workers. Each worker adds +1 processing speed
+    (like adding another machine at a station). All workers at a node must
+    be trained on the same concept — they're parallel copies.
     """
 
     def __init__(
         self,
         node_id: str,
         worker: FactoryWorker | None = None,
-        processing_speed: int = 1,
         queue_capacity: int = 20,
     ):
         self.node_id = node_id
-        self.worker = worker
+        self.worker = worker  # primary worker (used for predictions)
+        self.extra_workers: list[FactoryWorker] = []  # parallel copies
         self.edges: list[RoutingEdge] = []
         self.queue: deque = deque()
-        self.processing_speed = processing_speed
         self.queue_capacity = queue_capacity
+
+    @property
+    def processing_speed(self) -> int:
+        """Speed = number of workers at this node."""
+        count = 1 if self.worker else 0
+        count += len(self.extra_workers)
+        return count
 
     def route(self, prediction: str) -> str | None:
         """Return the target for *prediction*, or ``None`` if no edge matches."""
@@ -100,10 +107,9 @@ class RoutingGraph:
         self,
         node_id: str,
         worker: FactoryWorker | None = None,
-        processing_speed: int = 1,
         queue_capacity: int = 20,
     ) -> RoutingNode:
-        node = RoutingNode(node_id, worker=worker, processing_speed=processing_speed, queue_capacity=queue_capacity)
+        node = RoutingNode(node_id, worker=worker, queue_capacity=queue_capacity)
         self.nodes[node_id] = node
         if self.root_id is None:
             self.root_id = node_id

@@ -66,7 +66,8 @@ class FactoryWorker:
         self._support_set: dict[str, list[torch.Tensor]] = defaultdict(list)
 
         # Build model and wrap in MAML
-        self._base_model = Conv4WithHead(num_classes=num_classes).to(self.device)
+        self.hidden = 128  # match the general checkpoint
+        self._base_model = Conv4WithHead(num_classes=num_classes, hidden=self.hidden).to(self.device)
         self._maml = l2l.algorithms.MAML(
             self._base_model, lr=INNER_LR, first_order=True
         )
@@ -285,14 +286,8 @@ class FactoryWorker:
 
     @property
     def natural_speed(self) -> int:
-        """Processing speed derived from task complexity.
-
-        Binary tasks (2 classes) are fast; many-way tasks are slow.
-        This ensures routing advantages emerge from task structure,
-        not hardcoded multipliers.
-        """
-        n = max(1, len(self.class_names))
-        return max(1, 6 - n)  # 2-class→4, 3-class→3, 4-class→2, 5+→1
+        """All workers process at the same speed. No artificial advantages."""
+        return 1
 
     def get_support_set_size(self) -> int:
         return sum(len(v) for v in self._support_set.values())

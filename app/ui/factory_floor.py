@@ -545,7 +545,6 @@ class FactoryFloorUI:
         node_id = f"node_{len(self.world.graph.nodes)}"
         self.world.graph.add_node(
             node_id,
-            processing_speed=worker.natural_speed,
             queue_capacity=10,
         )
         self.world.assign_worker(worker, node_id)
@@ -710,12 +709,6 @@ class FactoryFloorUI:
                 if valid_cats:
                     test = self.gen.generate_balanced_batch(30, valid_cats)
                     worker.estimate_accuracy(test)
-
-            # Update node processing speed
-            for node in self.world.graph.nodes.values():
-                if node.worker is worker:
-                    node.processing_speed = worker.natural_speed
-                    break
 
             n_examples = worker.get_support_set_size()
             if not worker.category_mapping:

@@ -15,7 +15,8 @@ if TYPE_CHECKING:
 _CHECKPOINT_DIR = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "models", "checkpoints")
 )
-SORT_CHECKPOINT = os.path.join(_CHECKPOINT_DIR, "sort_it_out_maml.pt")
+GENERAL_CHECKPOINT = os.path.join(_CHECKPOINT_DIR, "general_conv4_128.pt")
+# Fallback to old checkpoint if general hasn't been trained yet
 WHATS_CHECKPOINT = os.path.join(_CHECKPOINT_DIR, "whats_this_maml.pt")
 
 
@@ -139,8 +140,7 @@ class FactoryWorld:
 
         self.economy.spend(self.economy.HIRE_COST)
 
-        # whats_this checkpoint transfers better to factory shapes
-        checkpoint = WHATS_CHECKPOINT
+        checkpoint = GENERAL_CHECKPOINT if os.path.exists(GENERAL_CHECKPOINT) else WHATS_CHECKPOINT
         if binary:
             num_classes = 2
         else:

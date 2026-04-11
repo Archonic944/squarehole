@@ -95,7 +95,7 @@ def build_generalist(gen, start_objects=1):
     world = make_world(gen, start_objects)
     w = world.hire_worker("Generalist", binary=False)
     train_terminal_worker(w, gen, CATS_8, examples_per_class=8)
-    world.graph.add_node("clf", processing_speed=w.natural_speed, queue_capacity=QUEUE_CAP)
+    world.graph.add_node("clf", queue_capacity=QUEUE_CAP)
     world.graph.set_root("clf")
     world.assign_worker(w, "clf")
     for cat in CATS_8:
@@ -124,7 +124,7 @@ def build_deep_routing(gen, start_objects=1):
     train_terminal_worker(sb, gen, blocky, 10)
 
     for nid, w in [("root", root), ("sub", sub), ("sr", sr), ("ss", ss), ("sb", sb)]:
-        world.graph.add_node(nid, processing_speed=w.natural_speed, queue_capacity=QUEUE_CAP)
+        world.graph.add_node(nid, queue_capacity=QUEUE_CAP)
         world.assign_worker(w, nid)
     world.graph.set_root("root")
 

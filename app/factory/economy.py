@@ -19,12 +19,13 @@ class Economy:
     total_spent: float = 0.0
     total_penalties: float = 0.0
 
-    # Configurable rates — tuned so a 60%+ accurate factory profits
+    # Tuned so accuracy is the dominant economic lever.
+    # Wrong answers are expensive — routing for accuracy matters.
     CORRECT_REWARD: float = 15.0
-    WRONG_PENALTY: float = 3.0
+    WRONG_PENALTY: float = 8.0
     DROPPED_PENALTY: float = 1.0
     HIRE_COST: float = 100.0
-    UPKEEP_PER_WORKER: float = 0.3  # per tick
+    UPKEEP_PER_WORKER: float = 0.2  # per tick (low so more workers isn't punishing)
 
     # Rolling history for coins_per_tick
     _recent_earnings: deque = field(default_factory=lambda: deque(maxlen=100))
