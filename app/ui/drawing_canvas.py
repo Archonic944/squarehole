@@ -6,7 +6,7 @@ import numpy as np
 
 CANVAS_SCALE = 4  # draw on 336x336, downscale to 84x84
 CANVAS_SIZE = 84 * CANVAS_SCALE
-BRUSH_SIZES = [2, 4, 8, 12]
+BRUSH_SIZES = [2, 4, 8, 12, 20, 32]
 DRAW_COLORS = [
     ("black", (0, 0, 0)),
     ("red", (220, 50, 50)),
@@ -228,11 +228,14 @@ class DrawingCanvas:
             r.draw_text(x, cur_y, "Size:", font=r.font_sm)
             cur_y += 16
             for i, sz in enumerate(BRUSH_SIZES):
+                col = i % 3
+                row = i // 3
                 color = (80, 80, 80) if i == self.brush_size_idx else (150, 150, 155)
-                btn_rect = pygame.Rect(x + i * 42, cur_y, 36, 24)
+                btn_rect = pygame.Rect(x + col * 50, cur_y + row * 28, 44, 24)
                 if r.draw_button(btn_rect, str(sz), color):
                     self.brush_size_idx = i
-            cur_y += 32
+            rows = (len(BRUSH_SIZES) + 2) // 3
+            cur_y += rows * 28 + 6
 
         # Color palette
         r.draw_text(x, cur_y, "Color:", font=r.font_sm)

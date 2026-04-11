@@ -312,7 +312,7 @@ class FactoryFloorUI:
                         elif e.unicode and len(self._training_new_class_input) < 20:
                             self._training_new_class_input += e.unicode
             else:
-                canvas_rect = pygame.Rect(220, 70, CANVAS_SIZE, CANVAS_SIZE)
+                canvas_rect = pygame.Rect(270, 70, CANVAS_SIZE, CANVAS_SIZE)
                 self._canvas.handle_events(events, canvas_rect)
         elif self.state == IDLE:
             self._handle_idle_click()
@@ -1058,20 +1058,20 @@ class FactoryFloorUI:
         surface.blit(t, (W // 2 - t.get_width() // 2, 20))
 
         # Canvas
-        canvas_rect = pygame.Rect(220, 70, CANVAS_SIZE, CANVAS_SIZE)
+        canvas_rect = pygame.Rect(270, 70, CANVAS_SIZE, CANVAS_SIZE)
         surface.blit(self._canvas.canvas, canvas_rect.topleft)
         pygame.draw.rect(surface, (120, 120, 120), canvas_rect, 2)
 
         # Preview
         preview = self._canvas.get_surface_84()
         preview_scaled = pygame.transform.scale(preview, (70, 70))
-        surface.blit(preview_scaled, (110, 80))
-        pygame.draw.rect(surface, (120, 120, 120), (110, 80, 70, 70), 1)
+        surface.blit(preview_scaled, (25, 80))
+        pygame.draw.rect(surface, (120, 120, 120), (25, 80, 70, 70), 1)
         t = self.font_sm.render("Preview", True, subtle)
-        surface.blit(t, (118, 155))
+        surface.blit(t, (33, 155))
 
-        # Toolbar
-        self._canvas.draw_toolbar(surface, self, 90, 180)
+        # Toolbar (fits in x=20..260, canvas starts at 270)
+        self._canvas.draw_toolbar(surface, self, 20, 178)
 
         # --- Right panel: labels + add class ---
         label_x = canvas_rect.right + 25
