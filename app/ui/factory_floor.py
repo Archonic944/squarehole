@@ -135,7 +135,7 @@ class FactoryFloorUI:
         self._status_msg = ""
         self._status_timer = 0.0
         self.tick_timer = 0.0
-        self.tick_interval = 0.3  # seconds between ticks
+        self.tick_interval = 1.5  # seconds between ticks — one shape at a time
 
         # Fonts (initialized on first draw since pygame must be init'd)
         self._fonts_ready = False

@@ -19,7 +19,7 @@ def main():
 
     gen = ObjectGenerator(difficulty=0.0)
     world = FactoryWorld(gen)
-    world.objects_per_tick = 5
+    world.objects_per_tick = 1
     ui = FactoryFloorUI(world, gen)
 
     running = True
