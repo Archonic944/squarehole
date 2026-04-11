@@ -174,6 +174,38 @@ class DrawingCanvas:
                     self._drawing = False
                     self._last_mouse_pos = None
 
+    def draw_cursor_preview(self, surface, canvas_rect):
+        """Draw a ghost outline of the brush/stamp at the mouse position."""
+        mx, my = pygame.mouse.get_pos()
+        if not canvas_rect.collidepoint(mx, my):
+            return
+        color = self.current_color
+        # Use a contrasting outline color
+        brightness = color[0] * 0.3 + color[1] * 0.6 + color[2] * 0.1
+        outline = (80, 80, 80) if brightness > 128 else (200, 200, 200)
+
+        if self.tool == TOOL_BRUSH:
+            r = self.current_brush_radius
+            pygame.draw.circle(surface, outline, (mx, my), r, 1)
+        elif self.tool == TOOL_STAMP:
+            shape = STAMP_SHAPES[self.stamp_idx]
+            r = self.current_brush_radius * 2
+            lx = mx - canvas_rect.x
+            ly = my - canvas_rect.y
+            if shape == "circle":
+                pygame.draw.circle(surface, outline, (mx, my), r, 1)
+            else:
+                pts = _stamp_points(shape, lx, ly, r)
+                if pts:
+                    screen_pts = [(p[0] + canvas_rect.x, p[1] + canvas_rect.y) for p in pts]
+                    pygame.draw.polygon(surface, outline, screen_pts, 1)
+        elif self.tool == TOOL_LINE and self._line_start is not None:
+            # Show line from start to cursor
+            sx = self._line_start[0] + canvas_rect.x
+            sy = self._line_start[1] + canvas_rect.y
+            w = max(1, self.current_brush_radius * 2)
+            pygame.draw.line(surface, outline, (sx, sy), (mx, my), w)
+
     def draw_toolbar(self, surface, renderer, x, y):
         """Draw the tool palette starting at (x, y). Returns the total height used."""
         r = renderer

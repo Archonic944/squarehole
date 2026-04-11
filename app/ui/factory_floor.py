@@ -1134,6 +1134,7 @@ class FactoryFloorUI:
         canvas_rect = pygame.Rect(270, 70, CANVAS_SIZE, CANVAS_SIZE)
         surface.blit(self._canvas.canvas, canvas_rect.topleft)
         pygame.draw.rect(surface, (120, 120, 120), canvas_rect, 2)
+        self._canvas.draw_cursor_preview(surface, canvas_rect)
 
         # Preview
         preview = self._canvas.get_surface_84()
