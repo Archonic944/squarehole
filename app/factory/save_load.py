@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import os
-from collections import defaultdict
-from typing import TYPE_CHECKING
 
 import torch
 
 from .objects import ObjectGenerator
-from .economy import Economy
-from .routing import RoutingGraph, RoutingNode, RoutingEdge
+from .routing import RoutingGraph, RoutingEdge
 from .worker import FactoryWorker
 from .world import FactoryWorld, GENERAL_CHECKPOINT, WHATS_CHECKPOINT
 
