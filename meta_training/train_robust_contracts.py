@@ -449,12 +449,28 @@ def _render_perforated(
         bbox = [x0, y0, x1, y1]
         if roundness > 0.92:
             draw.ellipse(bbox, fill=bg)
+        elif roundness < 0.12:
+            draw.rectangle(bbox, fill=bg)
         else:
-            w = max(0.0, x1 - x0)
-            h = max(0.0, y1 - y0)
-            max_corner = max(0.0, min(w, h) * 0.5 - 0.5)
-            corner = int(max(0.0, min(max_corner, min(hw, hh) * roundness)))
-            draw.rounded_rectangle(bbox, radius=corner, fill=bg)
+            # Avoid Pillow rounded_rectangle edge cases on tiny bboxes:
+            # use a superellipse approximation for intermediate roundness.
+            w = max(1.0, x1 - x0)
+            h = max(1.0, y1 - y0)
+            cx_h = (x0 + x1) * 0.5
+            cy_h = (y0 + y1) * 0.5
+            exp = 2.0 + (1.0 - roundness) * 5.0  # round -> boxy
+            hole_pts = _superellipse_points(
+                cx=cx_h,
+                cy=cy_h,
+                rx=w * 0.5,
+                ry=h * 0.5,
+                exponent=exp,
+                lobe_count=0,
+                lobe_depth=0.0,
+                phase=0.0,
+                n_points=64,
+            )
+            draw.polygon(hole_pts, fill=bg)
 
 
 def _render_spoke_web(
