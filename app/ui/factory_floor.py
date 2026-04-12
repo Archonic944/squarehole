@@ -376,6 +376,16 @@ class FactoryFloorUI:
         self._training_new_class_input = ""
         self._training_typing_new_class = False
 
+        # Dry run state (test how this node sorts shapes)
+        self._dry_run_active = False
+        self._dry_run_obj = None  # FactoryObject
+        self._dry_run_path: list[str] = []  # display names of nodes traversed before target
+        self._dry_run_prediction: str | None = None
+        self._dry_run_route: str | None = None  # "BIN:x", node display name, or "dropped"
+        self._dry_run_confidence: float = 0.0
+        self._dry_run_error: str | None = None
+        self._dry_run_preview_surf: pygame.Surface | None = None
+
         # Gallery: all drawings ever submitted, reusable across workers
         self._gallery: list[tuple[pygame.Surface, torch.Tensor]] = []  # (thumb, tensor)
         self._contract_thumb_cache: dict[str, pygame.Surface] = {}
@@ -684,7 +694,7 @@ class FactoryFloorUI:
                             self._training_new_class_input = self._training_new_class_input[:-1]
                         elif e.unicode and len(self._training_new_class_input) < 20:
                             self._training_new_class_input += e.unicode
-            else:
+            elif not self._dry_run_active:
                 canvas_rect = pygame.Rect(270, 70, CANVAS_SIZE, CANVAS_SIZE)
                 self._canvas.handle_events(events, canvas_rect)
         elif self.state == IDLE:
@@ -871,7 +881,7 @@ class FactoryFloorUI:
                     if key == "set_root" and node.node_id == self.world.graph.root_id:
                         continue
                     buttons.append(b)
-                positions = self._compute_radial_positions(cx, cy, buttons)
+                positions = self._compute_radial_positions(cx, cy, buttons, rect)
                 for bx, by, key, label, radius, color, icon_fn_name in positions:
                     dist = math.hypot(mx - bx, my - by)
                     if dist <= radius:
@@ -1083,6 +1093,7 @@ class FactoryFloorUI:
         self._training_typing_new_class = False
         self._training_new_class_input = ""
         self._canvas.clear()
+        self._dry_run_stop()
         self.state = TRAINING
 
     def _train_submit_drawing(self):
@@ -1144,7 +1155,130 @@ class FactoryFloorUI:
                 self._show_status(f"Trained {n_examples} examples. Accuracy: {worker.cached_accuracy*100:.0f}%")
 
         self._training_worker = None
+        self._dry_run_stop()
         self.state = IDLE
+
+    # ------------------------------------------------------------------
+    # Dry run: test how this node sorts generated shapes
+    # ------------------------------------------------------------------
+
+    def _dry_run_node_id(self) -> str | None:
+        if not self._training_worker:
+            return None
+        for nid, node in self.world.graph.nodes.items():
+            if node.worker is self._training_worker:
+                return nid
+        return None
+
+    def _dry_run_stop(self):
+        self._dry_run_active = False
+        self._dry_run_obj = None
+        self._dry_run_path = []
+        self._dry_run_prediction = None
+        self._dry_run_route = None
+        self._dry_run_confidence = 0.0
+        self._dry_run_error = None
+        self._dry_run_preview_surf = None
+
+    def _dry_run_start(self):
+        self._dry_run_active = True
+        self._dry_run_next()
+
+    def _route_target_label(self, target: str) -> str:
+        """Pretty-print a routing target (node_id or BIN:name) for display."""
+        if target is None:
+            return "dropped"
+        if target.startswith("BIN:"):
+            return f"Bin: {target[4:]}"
+        node = self.world.graph.nodes.get(target)
+        if node and node.worker:
+            return node.worker.name
+        return target
+
+    def _simulate_flow_to_node(self, obj, target_id: str):
+        """Walk *obj* from root through the graph (real inference) until it
+        reaches *target_id*. Returns (path_names, reached) where path_names is
+        the list of display names for nodes traversed BEFORE target_id.
+        """
+        graph = self.world.graph
+        if not graph.root_id:
+            return [], False
+        path: list[str] = []
+        current = graph.root_id
+        visited = set()
+        while current and current not in visited:
+            visited.add(current)
+            if current == target_id:
+                return path, True
+            node = graph.nodes.get(current)
+            if node is None or node.worker is None:
+                return path, False
+            if not node.worker.class_names or not node.worker._support_set:
+                return path, False
+            path.append(node.worker.name)
+            pred, _ = node.worker.predict_real(obj.tensor)
+            nxt = node.route(pred)
+            if nxt is None or nxt.startswith("BIN:"):
+                return path, False
+            current = nxt
+        return path, False
+
+    def _dry_run_next(self):
+        """Generate a shape that actually reaches this node and classify it."""
+        self._dry_run_obj = None
+        self._dry_run_path = []
+        self._dry_run_prediction = None
+        self._dry_run_route = None
+        self._dry_run_confidence = 0.0
+        self._dry_run_error = None
+        self._dry_run_preview_surf = None
+
+        worker = self._training_worker
+        target_id = self._dry_run_node_id()
+        if not worker or target_id is None:
+            self._dry_run_error = "Node not found."
+            return
+        if not worker.class_names or not worker._support_set:
+            self._dry_run_error = "Train at least one example first."
+            return
+
+        cats = [c for c in self.world.active_categories if c in self.gen.ALL_CATEGORIES]
+        if not cats:
+            self._dry_run_error = "No active categories."
+            return
+
+        is_root = (self.world.graph.root_id == target_id)
+        obj = None
+        path: list[str] = []
+        for _ in range(60):
+            candidate = self.gen.generate(random.choice(cats))
+            if is_root:
+                obj, path = candidate, []
+                break
+            p, reached = self._simulate_flow_to_node(candidate, target_id)
+            if reached:
+                obj, path = candidate, p
+                break
+
+        if obj is None:
+            self._dry_run_error = "No shapes reach this node given current routing."
+            return
+
+        pred, conf = worker.predict_real(obj.tensor)
+        node = self.world.graph.nodes.get(target_id)
+        route_target = node.route(pred) if node else None
+
+        self._dry_run_obj = obj
+        self._dry_run_path = path
+        self._dry_run_prediction = pred
+        self._dry_run_confidence = conf
+        self._dry_run_route = self._route_target_label(route_target)
+
+        # Precompute a pygame preview surface from the tensor
+        import numpy as np
+        arr = (obj.tensor.permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(np.uint8)
+        surf = pygame.surfarray.make_surface(arr.transpose(1, 0, 2))
+        self._dry_run_preview_surf = surf
 
     # ------------------------------------------------------------------
     # Dialog helpers
@@ -1282,17 +1416,16 @@ class FactoryFloorUI:
         if self._draw_btn_raw(surface, btn_rect, c_label, col):
             self.state = CONTRACTS
 
-        # Load button (left of Contracts)
-        load_rect = pygame.Rect(btn_rect.x - 70, 10, 60, TOP_H - 20)
-        if self._draw_btn_raw(surface, load_rect, "Load", (110, 130, 160)):
+        # Small S/L buttons on the left, after the "obj/tick" label
+        sl_size = TOP_H - 22
+        save_rect = pygame.Rect(310, 11, sl_size, sl_size)
+        load_rect = pygame.Rect(310 + sl_size + 6, 11, sl_size, sl_size)
+        if self._draw_btn_raw(surface, load_rect, "L", (110, 130, 160)):
             from ..factory.save_load import list_saves
             self._save_list_cache = list_saves()
             self._load_selected = None
             self.state = LOAD_DIALOG
-
-        # Save button (left of Load)
-        save_rect = pygame.Rect(load_rect.x - 70, 10, 60, TOP_H - 20)
-        if self._draw_btn_raw(surface, save_rect, "Save", (110, 160, 130)):
+        if self._draw_btn_raw(surface, save_rect, "S", (110, 160, 130)):
             from ..factory.save_load import list_saves
             self._save_list_cache = list_saves()
             if not self._save_name_input:
@@ -1543,7 +1676,7 @@ class FactoryFloorUI:
 
         return y
 
-    def _compute_radial_positions(self, cx, cy, buttons):
+    def _compute_radial_positions(self, cx, cy, buttons, node_rect=None):
         """Compute radial button positions, adapting arc when near graph edges.
 
         Returns list of (bx, by, key, label, radius, color, icon_fn_name).
@@ -1552,7 +1685,14 @@ class FactoryFloorUI:
             return []
 
         max_btn_r = max(b[2] for b in buttons)
-        margin = RADIAL_RING_R + max_btn_r + 4
+        # Ring radius must clear the node's bounding box so buttons don't
+        # land on top of wide worker labels.
+        base_ring = RADIAL_RING_R
+        if node_rect is not None:
+            half_w = node_rect.width / 2
+            half_h = node_rect.height / 2
+            base_ring = max(base_ring, int(math.hypot(half_w, half_h)) + max_btn_r + 6)
+        margin = base_ring + max_btn_r + 4
 
         # Check which directions are blocked
         space_left = cx - GRAPH_X
@@ -1572,8 +1712,8 @@ class FactoryFloorUI:
             result = []
             for key, label, radius, color, icon_fn_name, angle_deg in buttons:
                 angle_rad = math.radians(angle_deg)
-                bx = cx + int(RADIAL_RING_R * math.cos(angle_rad))
-                by = cy + int(RADIAL_RING_R * math.sin(angle_rad))
+                bx = cx + int(base_ring * math.cos(angle_rad))
+                by = cy + int(base_ring * math.sin(angle_rad))
                 result.append((bx, by, key, label, radius, color, icon_fn_name))
             return result
 
@@ -1581,8 +1721,8 @@ class FactoryFloorUI:
         valid_angles = []
         for deg in range(0, 360, 5):
             rad = math.radians(deg)
-            test_x = cx + RADIAL_RING_R * math.cos(rad)
-            test_y = cy + RADIAL_RING_R * math.sin(rad)
+            test_x = cx + base_ring * math.cos(rad)
+            test_y = cy + base_ring * math.sin(rad)
             # Check if this point (plus max button radius + margin) fits in graph
             if (test_x - max_btn_r - 2 >= GRAPH_X and
                 test_x + max_btn_r + 2 <= GRAPH_X + GRAPH_W and
@@ -1595,43 +1735,89 @@ class FactoryFloorUI:
             result = []
             for key, label, radius, color, icon_fn_name, angle_deg in buttons:
                 angle_rad = math.radians(angle_deg)
-                bx = cx + int(RADIAL_RING_R * math.cos(angle_rad))
-                by = cy + int(RADIAL_RING_R * math.sin(angle_rad))
+                bx = cx + int(base_ring * math.cos(angle_rad))
+                by = cy + int(base_ring * math.sin(angle_rad))
                 result.append((bx, by, key, label, radius, color, icon_fn_name))
             return result
 
-        # Distribute buttons evenly across the valid arc
+        # Find the largest gap between consecutive valid angles — this is the
+        # blocked arc — then place buttons in its complement.  Using modular
+        # arithmetic handles wraparound (e.g. blocked "up" gives valid angles
+        # like [0..245, 295..355], where naive arc_start/arc_end would span
+        # almost the whole circle and stack buttons at 0° and 355°).
+        step_deg = 5
+        gaps = []
+        for i in range(len(valid_angles)):
+            a = valid_angles[i]
+            b = valid_angles[(i + 1) % len(valid_angles)]
+            g = (b - a) % 360
+            if g == 0:
+                g = 360
+            gaps.append(g)
+        max_gap_idx = max(range(len(gaps)), key=lambda i: gaps[i])
+        max_gap = gaps[max_gap_idx]
+        arc_start_deg = float(
+            valid_angles[(max_gap_idx + 1) % len(valid_angles)]
+        )
+        arc_span = 360.0 - max_gap
+        if arc_span < 1:
+            arc_span = 360.0 - step_deg
+
         n = len(buttons)
         if n == 1:
-            mid_deg = valid_angles[len(valid_angles) // 2]
-            spread = [mid_deg]
-            ring_r = RADIAL_RING_R
+            spread = [(arc_start_deg + arc_span / 2) % 360]
+            ring_r = base_ring
         else:
-            arc_start = valid_angles[0]
-            arc_end = valid_angles[-1]
-            arc_span = arc_end - arc_start
-            if arc_span <= 0:
-                arc_span = 360
-            step = arc_span / (n - 1) if n > 1 else 0
-            spread = [arc_start + i * step for i in range(n)]
+            step = arc_span / (n - 1)
+            spread = [(arc_start_deg + i * step) % 360 for i in range(n)]
 
-            # Check if buttons would overlap and increase ring radius if needed
-            ring_r = RADIAL_RING_R
-            min_chord = max_btn_r * 2 + 8  # diameter + gap
+            # Expand ring radius if adjacent buttons would overlap.  Use the
+            # sum of each pair's radii so heterogeneous buttons (the big Train
+            # circle next to smaller Connect/Remove circles) space correctly.
+            ring_r = base_ring
             if step > 0:
-                # chord length between adjacent buttons at current ring_r
-                chord = 2 * ring_r * math.sin(math.radians(step / 2))
-                if chord < min_chord:
-                    # Increase ring_r so chord >= min_chord
-                    ring_r = int(min_chord / (2 * math.sin(math.radians(step / 2)))) + 1
+                half_step_sin = math.sin(math.radians(step / 2))
+                if half_step_sin > 0:
+                    for i in range(n - 1):
+                        min_chord = buttons[i][2] + buttons[i + 1][2] + 8
+                        chord = 2 * ring_r * half_step_sin
+                        if chord < min_chord:
+                            ring_r = int(min_chord / (2 * half_step_sin)) + 1
 
-        result = []
-        for i, (key, label, radius, color, icon_fn_name, _default_deg) in enumerate(buttons):
-            angle_rad = math.radians(spread[i])
-            bx = cx + int(ring_r * math.cos(angle_rad))
-            by = cy + int(ring_r * math.sin(angle_rad))
-            result.append((bx, by, key, label, radius, color, icon_fn_name))
-        return result
+        # Place buttons; then do a final pairwise safety pass so any residual
+        # overlap (e.g. from rounding or the single-button branch) grows the
+        # ring rather than producing a visually stacked pair.
+        def compute_positions(r):
+            out = []
+            for i, (key, label, radius, color, icon_fn_name, _default_deg) in enumerate(buttons):
+                angle_rad = math.radians(spread[i])
+                bx = cx + int(r * math.cos(angle_rad))
+                by = cy + int(r * math.sin(angle_rad))
+                out.append((bx, by, key, label, radius, color, icon_fn_name))
+            return out
+
+        for _ in range(6):
+            positions = compute_positions(ring_r)
+            worst_needed = ring_r
+            for i in range(len(positions)):
+                for j in range(i + 1, len(positions)):
+                    bxi, byi, _, _, ri, _, _ = positions[i]
+                    bxj, byj, _, _, rj, _, _ = positions[j]
+                    required = ri + rj + 4
+                    d = math.hypot(bxi - bxj, byi - byj)
+                    if d < required:
+                        # Scale ring so this pair is at least `required` apart.
+                        # chord between two points on same ring ~= 2r*sin(Δθ/2),
+                        # so scaling r by required/d gives a proportional fix.
+                        if d > 0:
+                            worst_needed = max(worst_needed, int(ring_r * required / d) + 1)
+                        else:
+                            worst_needed = ring_r + 10
+            if worst_needed == ring_r:
+                break
+            ring_r = worst_needed
+
+        return compute_positions(ring_r)
 
     def _draw_radial_menu(self, surface):
         """Draw the radial context menu around the selected node."""
@@ -1658,7 +1844,7 @@ class FactoryFloorUI:
                 continue
             buttons.append(b)
 
-        positions = self._compute_radial_positions(cx, cy, buttons)
+        positions = self._compute_radial_positions(cx, cy, buttons, rect)
         if not positions:
             return
 
@@ -2068,28 +2254,45 @@ class FactoryFloorUI:
         self._viewport_initialized = False
         self.paused = True
 
-    def _confirm_load(self, name: str):
-        from ..factory.save_load import save_path_for, load_game
+    PRESETS = [
+        ("preset:simple_split",   "Preset: Simple Split",   "2-way round/angular split"),
+        ("preset:two_level_tree", "Preset: Two-Level Tree", "8 shapes, pointy vs smooth"),
+        ("preset:stress_test",    "Preset: Stress Test",    "All 18 shapes, large DAG"),
+    ]
+
+    def _resolve_device(self):
         try:
             if self.world.workers:
-                device = str(self.world.workers[0].device)
-            else:
-                import torch
-                if torch.backends.mps.is_available():
-                    device = "mps"
-                elif torch.cuda.is_available():
-                    device = "cuda"
-                else:
-                    device = "cpu"
+                return str(self.world.workers[0].device)
         except Exception:
-            device = "cpu"
+            pass
         try:
-            new_world = load_game(save_path_for(name), device=device)
+            import torch
+            if torch.backends.mps.is_available():
+                return "mps"
+            if torch.cuda.is_available():
+                return "cuda"
+        except Exception:
+            pass
+        return "cpu"
+
+    def _confirm_load(self, name: str):
+        device = self._resolve_device()
+        try:
+            if name.startswith("preset:"):
+                from ..factory import presets as _presets
+                fn = getattr(_presets, name.split(":", 1)[1])
+                new_world = fn(device=device)
+                label = dict((k, lbl) for k, lbl, _ in self.PRESETS).get(name, name)
+            else:
+                from ..factory.save_load import save_path_for, load_game
+                new_world = load_game(save_path_for(name), device=device)
+                label = name
         except Exception as ex:
             self._show_status(f"Load failed: {ex}")
             return
         self._swap_world(new_world)
-        self._show_status(f"Loaded: {name}")
+        self._show_status(f"Loaded: {label}")
         self.state = IDLE
 
     def _draw_save_dialog(self, surface):
@@ -2163,44 +2366,59 @@ class FactoryFloorUI:
         panel_x = W // 2 - panel_w // 2
         panel_y = 100
 
-        if not self._save_list_cache:
+        row_h = 34
+        max_rows = 14
+        rows: list[tuple[str, str, str]] = []
+        for key, label, desc in self.PRESETS:
+            rows.append((key, label, desc))
+        for info in self._save_list_cache:
+            import time as _t
+            ts = _t.strftime("%Y-%m-%d %H:%M", _t.localtime(info.mtime))
+            kb = info.size / 1024
+            rows.append((info.name, info.name, f"{ts}   {kb:.0f} KB"))
+        rows = rows[:max_rows]
+
+        if not rows:
             msg = self.font.render("No saves yet.", True, subtle)
             surface.blit(msg, (W // 2 - msg.get_width() // 2, panel_y + 40))
         else:
-            row_h = 34
-            max_rows = 14
-            for i, info in enumerate(self._save_list_cache[:max_rows]):
+            for i, (key, label, meta_text) in enumerate(rows):
                 ry = panel_y + i * row_h
                 row_rect = pygame.Rect(panel_x, ry, panel_w, row_h - 4)
-                is_sel = (self._load_selected == info.name)
-                fill = (70, 90, 110) if is_sel else (55, 58, 68)
+                is_sel = (self._load_selected == key)
+                is_preset = key.startswith("preset:")
+                if is_sel:
+                    fill = (70, 90, 110)
+                elif is_preset:
+                    fill = (55, 65, 80)
+                else:
+                    fill = (55, 58, 68)
                 pygame.draw.rect(surface, fill, row_rect, border_radius=4)
                 border = (130, 170, 220) if is_sel else (90, 95, 110)
                 pygame.draw.rect(surface, border, row_rect, 2 if is_sel else 1, border_radius=4)
-                nt = self.font.render(info.name, True, title_color)
+                nt = self.font.render(label, True, title_color)
                 surface.blit(nt, (row_rect.x + 10, row_rect.y + 7))
-                import time as _t
-                ts = _t.strftime("%Y-%m-%d %H:%M", _t.localtime(info.mtime))
-                kb = info.size / 1024
-                meta = self.font_sm.render(f"{ts}   {kb:.0f} KB", True, subtle)
-                surface.blit(meta, (row_rect.right - meta.get_width() - 10, row_rect.y + 10))
+                mt = self.font_sm.render(meta_text, True, subtle)
+                surface.blit(mt, (row_rect.right - mt.get_width() - 10, row_rect.y + 10))
                 if self._click_pos and row_rect.collidepoint(self._click_pos):
-                    self._load_selected = info.name
+                    self._load_selected = key
 
         # Buttons
-        btn_y = panel_y + max(1, min(len(self._save_list_cache), 14)) * 34 + 20
+        btn_y = panel_y + max(1, len(rows)) * row_h + 20
         load_btn = pygame.Rect(W // 2 - 230, btn_y, 130, 40)
         del_btn = pygame.Rect(W // 2 - 70, btn_y, 130, 40)
         cancel_btn = pygame.Rect(W // 2 + 100, btn_y, 130, 40)
 
-        enabled = self._load_selected is not None
-        load_col = (100, 160, 100) if enabled else (80, 90, 90)
-        del_col = (180, 100, 100) if enabled else (80, 90, 90)
-        if self._draw_btn_raw(surface, load_btn, "Load", load_col) and enabled:
-            self._confirm_load(self._load_selected)
-        if self._draw_btn_raw(surface, del_btn, "Delete", del_col) and enabled:
+        sel = self._load_selected
+        can_load = sel is not None
+        can_delete = sel is not None and not sel.startswith("preset:")
+        load_col = (100, 160, 100) if can_load else (80, 90, 90)
+        del_col = (180, 100, 100) if can_delete else (80, 90, 90)
+        if self._draw_btn_raw(surface, load_btn, "Load", load_col) and can_load:
+            self._confirm_load(sel)
+        if self._draw_btn_raw(surface, del_btn, "Delete", del_col) and can_delete:
             from ..factory.save_load import delete_save, list_saves
-            delete_save(self._load_selected)
+            delete_save(sel)
             self._save_list_cache = list_saves()
             self._load_selected = None
         if self._draw_btn_raw(surface, cancel_btn, "Cancel", (150, 100, 100)):
@@ -2229,20 +2447,23 @@ class FactoryFloorUI:
 
         # Canvas
         canvas_rect = pygame.Rect(270, 70, CANVAS_SIZE, CANVAS_SIZE)
-        surface.blit(self._canvas.canvas, canvas_rect.topleft)
-        pygame.draw.rect(surface, (120, 120, 120), canvas_rect, 2)
-        self._canvas.draw_cursor_preview(surface, canvas_rect)
+        if self._dry_run_active:
+            self._draw_dry_run_panel(surface, canvas_rect, subtle, title_color)
+        else:
+            surface.blit(self._canvas.canvas, canvas_rect.topleft)
+            pygame.draw.rect(surface, (120, 120, 120), canvas_rect, 2)
+            self._canvas.draw_cursor_preview(surface, canvas_rect)
 
-        # Preview
-        preview = self._canvas.get_surface_84()
-        preview_scaled = pygame.transform.scale(preview, (70, 70))
-        surface.blit(preview_scaled, (25, 80))
-        pygame.draw.rect(surface, (120, 120, 120), (25, 80, 70, 70), 1)
-        t = self.font_sm.render("Preview", True, subtle)
-        surface.blit(t, (33, 155))
+            # Preview
+            preview = self._canvas.get_surface_84()
+            preview_scaled = pygame.transform.scale(preview, (70, 70))
+            surface.blit(preview_scaled, (25, 80))
+            pygame.draw.rect(surface, (120, 120, 120), (25, 80, 70, 70), 1)
+            t = self.font_sm.render("Preview", True, subtle)
+            surface.blit(t, (33, 155))
 
-        # Toolbar (fits in x=20..260, canvas starts at 270)
-        self._canvas.draw_toolbar(surface, self, 20, 178)
+            # Toolbar (fits in x=20..260, canvas starts at 270)
+            self._canvas.draw_toolbar(surface, self, 20, 178)
 
         # --- Right panel: labels + add class ---
         label_x = canvas_rect.right + 25
@@ -2369,21 +2590,40 @@ class FactoryFloorUI:
         btn_y = canvas_rect.bottom + 15
         has_classes = bool(worker.class_names)
 
-        if has_classes:
-            add_rect = pygame.Rect(310, btn_y, 150, 36)
-            if worker.is_memory_full:
-                # Disabled: flat gray, no hover, no click
-                pygame.draw.rect(surface, (90, 90, 90), add_rect, border_radius=5)
-                pygame.draw.rect(surface, (0, 0, 0), add_rect, 1, border_radius=5)
-                t = self.font_sm.render("Memory Full", True, (180, 180, 180))
-                surface.blit(t, (add_rect.x + (add_rect.width - t.get_width()) // 2,
-                                 add_rect.y + (add_rect.height - t.get_height()) // 2))
-            else:
-                if self._draw_btn_raw(surface, add_rect,
-                                      "Add Example", (80, 160, 80)):
-                    self._train_submit_drawing()
+        if self._dry_run_active:
+            if self._draw_btn_raw(surface, pygame.Rect(280, btn_y, 150, 36),
+                                  "Next Shape", (80, 140, 180)):
+                self._dry_run_next()
+            if self._draw_btn_raw(surface, pygame.Rect(440, btn_y, 150, 36),
+                                  "Exit Dry Run", (160, 120, 80)):
+                self._dry_run_stop()
+        else:
+            if has_classes:
+                add_rect = pygame.Rect(280, btn_y, 140, 36)
+                if worker.is_memory_full:
+                    pygame.draw.rect(surface, (90, 90, 90), add_rect, border_radius=5)
+                    pygame.draw.rect(surface, (0, 0, 0), add_rect, 1, border_radius=5)
+                    t = self.font_sm.render("Memory Full", True, (180, 180, 180))
+                    surface.blit(t, (add_rect.x + (add_rect.width - t.get_width()) // 2,
+                                     add_rect.y + (add_rect.height - t.get_height()) // 2))
+                else:
+                    if self._draw_btn_raw(surface, add_rect,
+                                          "Add Example", (80, 160, 80)):
+                        self._train_submit_drawing()
 
-        if self._draw_btn_raw(surface, pygame.Rect(490, btn_y, 120, 36),
+            dry_rect = pygame.Rect(430, btn_y, 120, 36)
+            dry_enabled = has_classes and bool(worker._support_set)
+            if dry_enabled:
+                if self._draw_btn_raw(surface, dry_rect, "Dry Run", (100, 130, 180)):
+                    self._dry_run_start()
+            else:
+                pygame.draw.rect(surface, (90, 90, 90), dry_rect, border_radius=5)
+                pygame.draw.rect(surface, (0, 0, 0), dry_rect, 1, border_radius=5)
+                t = self.font_sm.render("Dry Run", True, (160, 160, 160))
+                surface.blit(t, (dry_rect.x + (dry_rect.width - t.get_width()) // 2,
+                                 dry_rect.y + (dry_rect.height - t.get_height()) // 2))
+
+        if self._draw_btn_raw(surface, pygame.Rect(600, btn_y, 100, 36),
                               "Done", (160, 100, 100)):
             self._train_done()
 
@@ -2391,6 +2631,77 @@ class FactoryFloorUI:
         if self._status_timer > 0:
             st = self.font.render(self._status_msg, True, (255, 200, 80))
             surface.blit(st, (W // 2 - st.get_width() // 2, btn_y + 45))
+
+    def _draw_dry_run_panel(self, surface, rect, subtle, title_color):
+        """Render the dry-run panel inside *rect* (canvas area)."""
+        pygame.draw.rect(surface, (30, 32, 38), rect)
+        pygame.draw.rect(surface, (120, 120, 120), rect, 2)
+
+        header = self.font.render("Dry Run", True, title_color)
+        surface.blit(header, (rect.x + 10, rect.y + 8))
+
+        if self._dry_run_error:
+            lines = self._wrap_text(self._dry_run_error, self.font_sm, rect.width - 20)
+            y = rect.y + 50
+            for line in lines:
+                t = self.font_sm.render(line, True, (230, 160, 160))
+                surface.blit(t, (rect.x + 10, y))
+                y += 18
+            return
+
+        if self._dry_run_preview_surf is None:
+            t = self.font_sm.render("Generating...", True, subtle)
+            surface.blit(t, (rect.x + 10, rect.y + 50))
+            return
+
+        # Big shape preview, centered
+        img_size = 220
+        img_x = rect.x + (rect.width - img_size) // 2
+        img_y = rect.y + 42
+        scaled = pygame.transform.smoothscale(self._dry_run_preview_surf, (img_size, img_size))
+        surface.blit(scaled, (img_x, img_y))
+        pygame.draw.rect(surface, (100, 100, 100), (img_x, img_y, img_size, img_size), 1)
+
+        info_y = img_y + img_size + 10
+
+        # Prediction
+        worker_name = self._training_worker.name if self._training_worker else "this node"
+        pred_line = f"{worker_name} → {self._dry_run_prediction}  ({self._dry_run_confidence*100:.0f}%)"
+        t = self.font.render(pred_line, True, (200, 230, 200))
+        surface.blit(t, (rect.x + (rect.width - t.get_width()) // 2, info_y))
+        info_y += 24
+
+        # Route
+        route_line = f"Routes to: {self._dry_run_route}"
+        t = self.font_sm.render(route_line, True, subtle)
+        surface.blit(t, (rect.x + (rect.width - t.get_width()) // 2, info_y))
+        info_y += 20
+
+        # Path caption
+        if self._dry_run_path:
+            path_str = " → ".join(self._dry_run_path + [f"[{worker_name}]"])
+        else:
+            path_str = f"[{worker_name}] (root)"
+        path_label = f"Path: {path_str}"
+        for line in self._wrap_text(path_label, self.font_sm, rect.width - 20):
+            t = self.font_sm.render(line, True, (170, 170, 190))
+            surface.blit(t, (rect.x + (rect.width - t.get_width()) // 2, info_y))
+            info_y += 16
+
+    def _wrap_text(self, text, font, max_width):
+        words = text.split(" ")
+        lines, cur = [], ""
+        for w in words:
+            trial = w if not cur else cur + " " + w
+            if font.size(trial)[0] <= max_width:
+                cur = trial
+            else:
+                if cur:
+                    lines.append(cur)
+                cur = w
+        if cur:
+            lines.append(cur)
+        return lines
 
     def _draw_overlay_bg(self, surface, opaque=False):
         if opaque:
