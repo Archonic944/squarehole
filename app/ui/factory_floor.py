@@ -325,6 +325,7 @@ TRAINING = 2
 DIALOG_TEXT = 3
 DIALOG_SELECT = 4
 CONTRACTS = 5
+SHAPE_PREVIEW = 6
 
 
 class FactoryFloorUI:
@@ -392,6 +393,12 @@ class FactoryFloorUI:
 
         # Click tracking
         self._click_pos = None
+
+        # Active-shapes strip (bottom bar)
+        self._shapes_page = 0
+        self._shapes_page_sig: tuple[str, ...] = ()
+        self._preview_category: str | None = None
+        self._preview_just_opened = False
 
     def _init_fonts(self):
         if not self._fonts_ready:
@@ -678,16 +685,17 @@ class FactoryFloorUI:
             self._handle_connecting_click()
 
         # Suppress click for background UI when overlay is active
-        if self.state in (TRAINING, DIALOG_TEXT, DIALOG_SELECT, CONTRACTS):
+        if self.state in (TRAINING, DIALOG_TEXT, DIALOG_SELECT, CONTRACTS, SHAPE_PREVIEW):
             self._bg_click_suppressed = True
         else:
             self._bg_click_suppressed = False
 
-        # ESC closes the contracts overlay
-        if self.state == CONTRACTS:
+        # ESC closes the contracts / shape preview overlays
+        if self.state in (CONTRACTS, SHAPE_PREVIEW):
             for e in events:
                 if e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE:
                     self.state = IDLE
+                    self._preview_category = None
 
     def _spawn_flow_shapes(self, results):
         """Spawn animated shape thumbnails showing actual objects on actual paths."""
@@ -1142,10 +1150,11 @@ class FactoryFloorUI:
         if getattr(self, '_bg_click_suppressed', False):
             self._click_pos = None
 
-        self._draw_top_bar(surface)
+        top_result = self._draw_top_bar(surface)
         self._draw_graph(surface)
         self._draw_side_panel(surface)
-        result = self._draw_bottom_bar(surface)
+        bottom_result = self._draw_bottom_bar(surface)
+        result = top_result or bottom_result
 
         # Restore click for overlay use
         self._click_pos = saved_click
@@ -1159,6 +1168,8 @@ class FactoryFloorUI:
             self._draw_contracts(surface)
         elif self.state == TRAINING:
             self._draw_training(surface)
+        elif self.state == SHAPE_PREVIEW:
+            self._draw_shape_preview(surface)
 
         # Status message (shown in all states except training which draws its own)
         if self.state != TRAINING and self._status_timer > 0:
@@ -1172,6 +1183,10 @@ class FactoryFloorUI:
         # Title
         t = self.font_lg.render("BabyBrain Factory", True, TEXT_LIGHT)
         surface.blit(t, (15, 8))
+        # Objects/tick (small, just right of the title)
+        opt_t = self.font_sm.render(
+            f"{self.world.objects_per_tick} obj/tick", True, TEXT_LIGHT)
+        surface.blit(opt_t, (220, 16))
         # Coins
         coins = self.world.economy.coins
         cpt = self.world.economy.coins_per_tick
@@ -1182,13 +1197,62 @@ class FactoryFloorUI:
         cpt_t = self.font_sm.render(f"{cpt:+.1f} $/tick", True, cpt_color)
         surface.blit(cpt_t, (W // 2 + 60, 15))
 
-        # Contracts button (top-right, left of any existing top-right UI)
+        mouse = pygame.mouse.get_pos()
+        result = None
+
+        # Right side, from rightmost inward:
+        #   [Quit] [play/pause circle] [Running label] [Contracts]
+
+        # Quit button
+        quit_rect = pygame.Rect(W - 70, 10, 55, TOP_H - 20)
+        quit_hover = quit_rect.collidepoint(mouse)
+        quit_color = (170, 140, 120) if quit_hover else (150, 120, 100)
+        pygame.draw.rect(surface, quit_color, quit_rect, border_radius=6)
+        pygame.draw.rect(surface, (80, 60, 50), quit_rect, 1, border_radius=6)
+        qt = self.font_sm.render("Quit", True, TEXT_LIGHT)
+        surface.blit(qt, (quit_rect.x + (quit_rect.width - qt.get_width()) // 2,
+                          quit_rect.y + (quit_rect.height - qt.get_height()) // 2))
+        if self._click_pos is not None and quit_rect.collidepoint(self._click_pos):
+            result = "MENU"
+
+        # Play/pause circle
+        circle_r = 14
+        circle_cx = W - 95
+        circle_cy = TOP_H // 2
+        circle_hover = (mouse[0] - circle_cx) ** 2 + (mouse[1] - circle_cy) ** 2 <= circle_r ** 2
+        if self.paused:
+            fill = (230, 80, 80) if circle_hover else (200, 60, 60)
+        else:
+            fill = (80, 195, 80) if circle_hover else (60, 170, 60)
+        pygame.draw.circle(surface, fill, (circle_cx, circle_cy), circle_r)
+        pygame.draw.circle(surface, (40, 40, 40), (circle_cx, circle_cy), circle_r, 2)
+        if self.paused:
+            _draw_icon_play(surface, circle_cx, circle_cy, circle_r)
+        else:
+            _draw_icon_pause(surface, circle_cx, circle_cy, circle_r)
+        if self._click_pos is not None:
+            dx = self._click_pos[0] - circle_cx
+            dy = self._click_pos[1] - circle_cy
+            if dx * dx + dy * dy <= circle_r * circle_r:
+                self.paused = not self.paused
+
+        # Running / Paused label (to left of circle)
+        label = "Paused" if self.paused else "Running"
+        color = RED if self.paused else GREEN
+        lt = self.font_sm.render(label, True, color)
+        surface.blit(lt, (circle_cx - circle_r - 6 - lt.get_width(),
+                          circle_cy - lt.get_height() // 2))
+
+        # Contracts button
+        contracts_right = circle_cx - circle_r - 6 - lt.get_width() - 10
         n_avail = len(self.world.available_contracts())
-        label = f"Contracts ({n_avail})" if n_avail else "Contracts"
-        btn_rect = pygame.Rect(W - 150, 10, 130, TOP_H - 20)
+        c_label = f"Contracts ({n_avail})" if n_avail else "Contracts"
+        btn_rect = pygame.Rect(contracts_right - 130, 10, 130, TOP_H - 20)
         col = (180, 140, 60) if n_avail else (100, 100, 110)
-        if self._draw_btn_raw(surface, btn_rect, label, col):
+        if self._draw_btn_raw(surface, btn_rect, c_label, col):
             self.state = CONTRACTS
+
+        return result
 
     def _draw_graph(self, surface):
         # Background
@@ -1627,74 +1691,134 @@ class FactoryFloorUI:
         by = H - BOTTOM_H
         pygame.draw.rect(surface, BOTTOM_BG, (0, by, W, BOTTOM_H))
 
-        # -- Left side: info text (unchanged) --
-        cats = self.world.active_categories
-        cat_str = ", ".join(cats[:6])
-        if len(cats) > 6:
-            cat_str += f" +{len(cats)-6}"
-        t = self.font_sm.render(f"Active: {cat_str}", True, TEXT_LIGHT)
-        surface.blit(t, (15, by + 8))
+        cats = tuple(self.world.active_categories)
+        if cats != self._shapes_page_sig:
+            self._shapes_page_sig = cats
+            # Clamp page if the set shrank
+            # (per_page computed below)
 
-        t = self.font_sm.render(f"Objects/tick: {self.world.objects_per_tick}", True, TEXT_LIGHT)
-        surface.blit(t, (15, by + 28))
+        THUMB = 36
+        GAP = 10
+        STRIP_PAD = 40  # room for arrows at each edge
+        strip_left = STRIP_PAD
+        strip_right = W - STRIP_PAD
+        strip_w = strip_right - strip_left
+        per_page = max(1, (strip_w + GAP) // (THUMB + GAP))
 
-        mouse = pygame.mouse.get_pos()
+        total = len(cats)
+        max_page = max(0, (total - 1) // per_page) if total else 0
+        if self._shapes_page > max_page:
+            self._shapes_page = max_page
 
-        # -- Right side: Quit button --
-        quit_rect = pygame.Rect(W - 175, by + 10, 55, 30)
-        quit_hover = quit_rect.collidepoint(mouse)
-        quit_color = (170, 140, 120) if quit_hover else (150, 120, 100)
-        pygame.draw.rect(surface, quit_color, quit_rect, border_radius=6)
-        pygame.draw.rect(surface, (80, 60, 50), quit_rect, 1, border_radius=6)
-        qt = self.font_sm.render("Quit", True, TEXT_LIGHT)
-        surface.blit(qt, (quit_rect.x + (quit_rect.width - qt.get_width()) // 2,
-                          quit_rect.y + (quit_rect.height - qt.get_height()) // 2))
-        if self._click_pos is not None and quit_rect.collidepoint(self._click_pos):
-            return "MENU"
+        if total == 0:
+            msg = self.font_sm.render(
+                "No active shapes yet. Accept a contract.",
+                True, TEXT_LIGHT)
+            surface.blit(msg, (strip_left, by + (BOTTOM_H - msg.get_height()) // 2))
+            return None
 
-        # -- Status label --
-        label = "Paused" if self.paused else "Running"
-        color = RED if self.paused else GREEN
-        lt = self.font_sm.render(label, True, color)
-        surface.blit(lt, (W - 110, by + 15))
+        # Thumbnails for the current page
+        start_idx = self._shapes_page * per_page
+        end_idx = min(total, start_idx + per_page)
+        thumb_y = by + (BOTTOM_H - THUMB) // 2
+        for slot, i in enumerate(range(start_idx, end_idx)):
+            cat = cats[i]
+            tx = strip_left + slot * (THUMB + GAP)
+            thumb = self._get_contract_thumb(cat, THUMB)
+            surface.blit(thumb, (tx, thumb_y))
+            rect = pygame.Rect(tx, thumb_y, THUMB, THUMB)
+            hover = rect.collidepoint(pygame.mouse.get_pos())
+            border_col = (230, 220, 140) if hover else (120, 120, 130)
+            pygame.draw.rect(surface, border_col, rect, 1)
+            if self._click_pos is not None and rect.collidepoint(self._click_pos):
+                self._preview_category = cat
+                self.state = SHAPE_PREVIEW
+                self._preview_just_opened = True
 
-        # -- Circular play/pause button --
-        circle_cx = W - 37
-        circle_cy = by + 25
-        circle_r = 18
+        # Page arrows (only if overflow)
+        if max_page > 0:
+            arrow_w = 28
+            arrow_h = 36
+            ay = by + (BOTTOM_H - arrow_h) // 2
+            mouse = pygame.mouse.get_pos()
 
-        circle_hover = (mouse[0] - circle_cx) ** 2 + (mouse[1] - circle_cy) ** 2 <= circle_r ** 2
+            # Left arrow
+            l_rect = pygame.Rect(6, ay, arrow_w, arrow_h)
+            l_enabled = self._shapes_page > 0
+            l_hover = l_enabled and l_rect.collidepoint(mouse)
+            l_col = (95, 105, 125) if l_hover else (70, 80, 100)
+            if not l_enabled:
+                l_col = (50, 55, 65)
+            pygame.draw.rect(surface, l_col, l_rect, border_radius=4)
+            pygame.draw.rect(surface, (30, 35, 45), l_rect, 1, border_radius=4)
+            l_tip = (20, 220, 220, 220) if l_enabled else (130, 130, 140, 130)
+            cx, cy = l_rect.center
+            pygame.draw.polygon(surface, l_tip[:3], [
+                (cx - 5, cy), (cx + 4, cy - 7), (cx + 4, cy + 7),
+            ])
+            if l_enabled and self._click_pos and l_rect.collidepoint(self._click_pos):
+                self._shapes_page -= 1
 
-        if self.paused:
-            fill = (230, 80, 80) if circle_hover else (200, 60, 60)
-        else:
-            fill = (80, 195, 80) if circle_hover else (60, 170, 60)
+            # Right arrow
+            r_rect = pygame.Rect(W - 6 - arrow_w, ay, arrow_w, arrow_h)
+            r_enabled = self._shapes_page < max_page
+            r_hover = r_enabled and r_rect.collidepoint(mouse)
+            r_col = (95, 105, 125) if r_hover else (70, 80, 100)
+            if not r_enabled:
+                r_col = (50, 55, 65)
+            pygame.draw.rect(surface, r_col, r_rect, border_radius=4)
+            pygame.draw.rect(surface, (30, 35, 45), r_rect, 1, border_radius=4)
+            r_tip_col = (220, 220, 220) if r_enabled else (130, 130, 140)
+            cx, cy = r_rect.center
+            pygame.draw.polygon(surface, r_tip_col, [
+                (cx + 5, cy), (cx - 4, cy - 7), (cx - 4, cy + 7),
+            ])
+            if r_enabled and self._click_pos and r_rect.collidepoint(self._click_pos):
+                self._shapes_page += 1
 
-        # Drop shadow
-        shadow_surf = pygame.Surface((circle_r * 2 + 8, circle_r * 2 + 8), pygame.SRCALPHA)
-        pygame.draw.circle(shadow_surf, (0, 0, 0, 60),
-                           (circle_r + 2, circle_r + 2), circle_r)
-        surface.blit(shadow_surf, (circle_cx - circle_r - 2 + 2,
-                                   circle_cy - circle_r - 2 + 2))
-
-        # Filled circle + border
-        pygame.draw.circle(surface, fill, (circle_cx, circle_cy), circle_r)
-        pygame.draw.circle(surface, (40, 40, 40), (circle_cx, circle_cy), circle_r, 2)
-
-        # Icon
-        if self.paused:
-            _draw_icon_play(surface, circle_cx, circle_cy, circle_r)
-        else:
-            _draw_icon_pause(surface, circle_cx, circle_cy, circle_r)
-
-        # Click detection (distance check)
-        if self._click_pos is not None:
-            dx = self._click_pos[0] - circle_cx
-            dy = self._click_pos[1] - circle_cy
-            if dx * dx + dy * dy <= circle_r * circle_r:
-                self.paused = not self.paused
+            # Page indicator (tiny text between arrows)
+            ind = self.font_sm.render(
+                f"{self._shapes_page + 1}/{max_page + 1}",
+                True, (160, 160, 170))
+            surface.blit(ind, (W // 2 - ind.get_width() // 2, by + 2))
 
         return None
+
+    def _draw_shape_preview(self, surface):
+        self._draw_overlay_bg(surface)
+
+        cat = self._preview_category
+        if not cat:
+            self.state = IDLE
+            return
+
+        panel_w = 500
+        panel_h = 520
+        panel_x = W // 2 - panel_w // 2
+        panel_y = H // 2 - panel_h // 2
+        panel_rect = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
+        pygame.draw.rect(surface, (45, 48, 58), panel_rect, border_radius=12)
+        pygame.draw.rect(surface, (120, 125, 140), panel_rect, 2, border_radius=12)
+
+        big = self._get_contract_thumb(cat, 400)
+        bx = panel_x + (panel_w - 400) // 2
+        surface.blit(big, (bx, panel_y + 30))
+
+        name_t = self.font_lg.render(cat, True, (230, 230, 240))
+        surface.blit(name_t,
+                     (panel_x + (panel_w - name_t.get_width()) // 2,
+                      panel_y + 30 + 400 + 20))
+
+        hint = self.font_sm.render("Click anywhere to close", True, (150, 150, 160))
+        surface.blit(hint,
+                     (W // 2 - hint.get_width() // 2, panel_y + panel_h - 25))
+
+        if self._preview_just_opened:
+            self._preview_just_opened = False
+            return
+        if self._click_pos is not None:
+            self.state = IDLE
+            self._preview_category = None
 
     # ------------------------------------------------------------------
     # Overlays
