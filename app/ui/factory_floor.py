@@ -1345,7 +1345,7 @@ class FactoryFloorUI:
     def _draw_top_bar(self, surface):
         pygame.draw.rect(surface, TOP_BG, (0, 0, W, TOP_H))
         # Title
-        t = self.font_lg.render("BabyBrain Factory", True, TEXT_LIGHT)
+        t = self.font_lg.render("SquareHole Factory", True, TEXT_LIGHT)
         surface.blit(t, (15, 8))
         # Objects/tick (small, just right of the title)
         opt_t = self.font_sm.render(
