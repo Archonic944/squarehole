@@ -64,6 +64,7 @@ def save_game(world: FactoryWorld, path: str) -> None:
             "speed_level": world.speed_level,
             "active_categories": list(world.active_categories),
             "remaining_categories": list(world._remaining_categories),
+            "accepted_contract_ids": sorted(world.accepted_contract_ids),
         },
         "economy": {
             "coins": world.economy.coins,
@@ -100,6 +101,7 @@ def load_game(path: str, device: str = "cpu") -> FactoryWorld:
     world.speed_level = wd["speed_level"]
     world.active_categories = list(wd["active_categories"])
     world._remaining_categories = list(wd["remaining_categories"])
+    world.accepted_contract_ids = set(wd.get("accepted_contract_ids", ["starter"]))
 
     # Reconstruct economy
     ed = data["economy"]

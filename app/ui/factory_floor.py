@@ -324,6 +324,7 @@ CONNECTING = 1
 TRAINING = 2
 DIALOG_TEXT = 3
 DIALOG_SELECT = 4
+CONTRACTS = 5
 
 
 class FactoryFloorUI:
@@ -374,6 +375,7 @@ class FactoryFloorUI:
 
         # Gallery: all drawings ever submitted, reusable across workers
         self._gallery: list[tuple[pygame.Surface, torch.Tensor]] = []  # (thumb, tensor)
+        self._contract_thumb_cache: dict[str, pygame.Surface] = {}
         self._show_gallery = False
         self._gallery_scroll = 0
 
@@ -676,10 +678,16 @@ class FactoryFloorUI:
             self._handle_connecting_click()
 
         # Suppress click for background UI when overlay is active
-        if self.state in (TRAINING, DIALOG_TEXT, DIALOG_SELECT):
+        if self.state in (TRAINING, DIALOG_TEXT, DIALOG_SELECT, CONTRACTS):
             self._bg_click_suppressed = True
         else:
             self._bg_click_suppressed = False
+
+        # ESC closes the contracts overlay
+        if self.state == CONTRACTS:
+            for e in events:
+                if e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE:
+                    self.state = IDLE
 
     def _spawn_flow_shapes(self, results):
         """Spawn animated shape thumbnails showing actual objects on actual paths."""
@@ -1147,6 +1155,8 @@ class FactoryFloorUI:
             self._draw_text_dialog(surface)
         elif self.state == DIALOG_SELECT:
             self._draw_select_dialog(surface)
+        elif self.state == CONTRACTS:
+            self._draw_contracts(surface)
         elif self.state == TRAINING:
             self._draw_training(surface)
 
@@ -1171,6 +1181,14 @@ class FactoryFloorUI:
         cpt_color = GREEN if cpt > 0 else RED if cpt < 0 else TEXT_LIGHT
         cpt_t = self.font_sm.render(f"{cpt:+.1f} $/tick", True, cpt_color)
         surface.blit(cpt_t, (W // 2 + 60, 15))
+
+        # Contracts button (top-right, left of any existing top-right UI)
+        n_avail = len(self.world.available_contracts())
+        label = f"Contracts ({n_avail})" if n_avail else "Contracts"
+        btn_rect = pygame.Rect(W - 150, 10, 130, TOP_H - 20)
+        col = (180, 140, 60) if n_avail else (100, 100, 110)
+        if self._draw_btn_raw(surface, btn_rect, label, col):
+            self.state = CONTRACTS
 
     def _draw_graph(self, surface):
         # Background
@@ -1747,6 +1765,102 @@ class FactoryFloorUI:
                 self._finish_connect_node_step1()
             else:
                 self.state = IDLE
+
+    def _get_contract_thumb(self, category: str, size: int = 48) -> pygame.Surface:
+        """Return a cached thumbnail of a sample shape for *category*."""
+        key = f"{category}:{size}"
+        cached = self._contract_thumb_cache.get(key)
+        if cached is not None:
+            return cached
+        import numpy as np
+        obj = self.gen.generate(category)
+        arr = (obj.tensor.permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(np.uint8)
+        surf = pygame.surfarray.make_surface(arr.transpose(1, 0, 2))
+        surf = pygame.transform.smoothscale(surf, (size, size))
+        self._contract_thumb_cache[key] = surf
+        return surf
+
+    def _draw_contracts(self, surface):
+        """Contracts overlay: list packs with Accept buttons."""
+        from ..factory.contracts import ALL_CONTRACTS
+
+        self._draw_overlay_bg(surface, opaque=True)
+
+        title_color = (220, 220, 230)
+        subtle = (160, 160, 170)
+
+        # Title
+        t = self.font_lg.render("Contracts", True, title_color)
+        surface.blit(t, (W // 2 - t.get_width() // 2, 30))
+        t2 = self.font_sm.render(
+            "Accept a contract to add its shapes to the factory.",
+            True, subtle)
+        surface.blit(t2, (W // 2 - t2.get_width() // 2, 65))
+
+        # Panel
+        panel_w = 640
+        panel_x = W // 2 - panel_w // 2
+        panel_y = 100
+        row_h = 130
+        padding = 14
+        thumb_sz = 48
+
+        for i, contract in enumerate(ALL_CONTRACTS):
+            ry = panel_y + i * (row_h + 10)
+            row_rect = pygame.Rect(panel_x, ry, panel_w, row_h)
+            accepted = contract.id in self.world.accepted_contract_ids
+
+            # Row background
+            bg_col = (55, 65, 55) if accepted else (50, 50, 60)
+            pygame.draw.rect(surface, bg_col, row_rect, border_radius=8)
+            border_col = (80, 140, 80) if accepted else (100, 100, 120)
+            pygame.draw.rect(surface, border_col, row_rect, 2, border_radius=8)
+
+            # Name
+            name_t = self.font.render(contract.name, True, title_color)
+            surface.blit(name_t, (row_rect.x + padding, row_rect.y + 10))
+
+            # Description
+            desc_t = self.font_sm.render(contract.description, True, subtle)
+            surface.blit(desc_t, (row_rect.x + padding, row_rect.y + 38))
+
+            # Shape thumbnails
+            thumb_y = row_rect.y + 62
+            for j, cat in enumerate(contract.categories):
+                tx = row_rect.x + padding + j * (thumb_sz + 6)
+                thumb = self._get_contract_thumb(cat, thumb_sz)
+                surface.blit(thumb, (tx, thumb_y))
+                pygame.draw.rect(surface, (100, 100, 110),
+                                 (tx, thumb_y, thumb_sz, thumb_sz), 1)
+
+            # Cost line (below thumbnails)
+            if contract.cost > 0:
+                cost_t = self.font_sm.render(
+                    f"Cost: ${contract.cost:.0f}", True, (230, 200, 80))
+                surface.blit(cost_t, (row_rect.x + padding,
+                                      thumb_y + thumb_sz + 4))
+
+            # Accept button / Accepted badge
+            btn_rect = pygame.Rect(
+                row_rect.right - 140, row_rect.y + row_h // 2 - 18, 120, 36)
+            if accepted:
+                pygame.draw.rect(surface, (70, 120, 70), btn_rect, border_radius=6)
+                pygame.draw.rect(surface, (40, 80, 40), btn_rect, 2, border_radius=6)
+                at = self.font_sm.render("Accepted", True, (230, 255, 230))
+                surface.blit(at, (btn_rect.x + (btn_rect.width - at.get_width()) // 2,
+                                  btn_rect.y + (btn_rect.height - at.get_height()) // 2))
+            else:
+                can_afford = (contract.cost <= 0
+                              or self.world.economy.can_afford(contract.cost))
+                btn_col = (100, 160, 100) if can_afford else (110, 80, 80)
+                if self._draw_btn_raw(surface, btn_rect, "Accept", btn_col):
+                    if can_afford and self.world.accept_contract(contract.id):
+                        self._show_status(f"Accepted: {contract.name}")
+
+        # Close button
+        close_rect = pygame.Rect(W // 2 - 70, panel_y + len(ALL_CONTRACTS) * (row_h + 10) + 20, 140, 40)
+        if self._draw_btn_raw(surface, close_rect, "Close", (150, 100, 100)):
+            self.state = IDLE
 
     def _draw_training(self, surface):
         self._draw_overlay_bg(surface, opaque=True)

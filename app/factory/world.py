@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+from .contracts import ALL_CONTRACTS, STARTER, get_contract, Contract
 from .economy import Economy
 from .routing import RoutingGraph, TickResults
 from .worker import FactoryWorker
@@ -60,14 +61,15 @@ class FactoryWorld:
         self.objects_per_tick: int = 3
         self.speed_level: int = 1  # global processing speed for all nodes
 
-        # Start with the first INITIAL_CATEGORIES from the generator's pool
-        all_cats = getattr(object_generator, "ALL_CATEGORIES", [])
-        self.active_categories: list[str] = list(
-            all_cats[: self.INITIAL_CATEGORIES]
-        )
-        self._remaining_categories: list[str] = list(
-            all_cats[self.INITIAL_CATEGORIES :]
-        )
+        # Progression is contract-based. The starter pack is accepted
+        # automatically; additional contracts are accepted explicitly
+        # from the Contracts UI.
+        self.accepted_contract_ids: set[str] = set()
+        self.active_categories: list[str] = []
+        # Kept for legacy preset / save-load compatibility. The auto-
+        # unlock path still works for presets that populate this list.
+        self._remaining_categories: list[str] = []
+        self.accept_contract(STARTER.id)
 
     # ------------------------------------------------------------------
     # Tick
@@ -176,6 +178,35 @@ class FactoryWorld:
         )
         self.workers.append(worker)
         return worker
+
+    # ------------------------------------------------------------------
+    # Contracts
+    # ------------------------------------------------------------------
+
+    def accept_contract(self, contract_id: str) -> bool:
+        """Accept a contract, adding its categories to the active pool.
+
+        Returns True on success. Returns False if the contract is unknown,
+        already accepted, or the factory cannot afford its cost.
+        """
+        if contract_id in self.accepted_contract_ids:
+            return False
+        contract = get_contract(contract_id)
+        if contract is None:
+            return False
+        if contract.cost > 0 and not self.economy.can_afford(contract.cost):
+            return False
+        if contract.cost > 0:
+            self.economy.spend(contract.cost)
+        self.accepted_contract_ids.add(contract_id)
+        for cat in contract.categories:
+            if cat not in self.active_categories:
+                self.active_categories.append(cat)
+        return True
+
+    def available_contracts(self) -> list[Contract]:
+        """Contracts not yet accepted, in display order."""
+        return [c for c in ALL_CONTRACTS if c.id not in self.accepted_contract_ids]
 
     def get_speed_upgrade_cost(self) -> float:
         return self.SPEED_UPGRADE_BASE_COST * (self.SPEED_UPGRADE_SCALE ** (self.speed_level - 1))
