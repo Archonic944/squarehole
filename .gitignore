@@ -5,3 +5,4 @@ __pycache__/
 *.pth
 ~/data/
 .DS_Store
+/pitches

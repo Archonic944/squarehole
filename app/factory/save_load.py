@@ -83,6 +83,7 @@ def save_game(world: FactoryWorld, path: str) -> None:
             "cached_accuracy": w.cached_accuracy,
             "category_mapping": dict(w.category_mapping),
             "support_set": support,
+            "memory_cap_bonus": w.memory_cap_bonus,
             "stats": {
                 "total_processed": w.stats.total_processed,
                 "total_correct": w.stats.total_correct,
@@ -176,6 +177,7 @@ def load_game(path: str, device: str = "cpu") -> FactoryWorld:
             tensors = wd_worker["support_set"].get(cls_name, [])
             for t in tensors:
                 w.teach(t.to(device), cls_name, force=True)
+        w.memory_cap_bonus = wd_worker.get("memory_cap_bonus", 0)
         w.role = wd_worker["role"]
         w.cached_accuracy = wd_worker["cached_accuracy"]
         w.category_mapping = dict(wd_worker["category_mapping"])

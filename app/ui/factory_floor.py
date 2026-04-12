@@ -1037,6 +1037,29 @@ class FactoryFloorUI:
         self._layout_dirty = True
         self._show_status(f"Cloned '{src.name}' for ${CLONE_COST}")
 
+    MEMORY_UPGRADE_STEP = 4
+
+    def _memory_upgrade_cost(self, worker) -> int:
+        tier = worker.memory_cap_bonus // self.MEMORY_UPGRADE_STEP
+        return 75 * (tier + 1)
+
+    def _action_upgrade_memory(self):
+        if not self.selected_node:
+            return
+        node = self.world.graph.nodes.get(self.selected_node)
+        if not node or not node.worker:
+            self._show_status("No worker to upgrade")
+            return
+        cost = self._memory_upgrade_cost(node.worker)
+        if not self.world.economy.can_afford(cost):
+            self._show_status(f"Not enough coins! Need ${cost}")
+            return
+        self.world.economy.spend(cost)
+        node.worker.memory_cap_bonus += self.MEMORY_UPGRADE_STEP
+        self._show_status(
+            f"Memory upgraded to {node.worker.memory_cap} for ${cost}"
+        )
+
     def _action_connect(self):
         """Connect a worker output to another node. Step 1: pick which output."""
         if not self.selected_node:
@@ -1714,6 +1737,14 @@ class FactoryFloorUI:
             clone_col = (140, 170, 210) if can_afford else (150, 150, 150)
             if self._draw_btn_raw(surface, clone_rect, f"Clone Node  (${clone_cost})", clone_col):
                 self._action_clone_node()
+            y += BTN_H + 6
+
+            mem_cost = self._memory_upgrade_cost(w)
+            mem_afford = self.world.economy.can_afford(mem_cost)
+            mem_rect = pygame.Rect(BTN_X, y, BTN_W, BTN_H)
+            mem_col = (170, 150, 200) if mem_afford else (150, 150, 150)
+            if self._draw_btn_raw(surface, mem_rect, f"+4 Memory  (${mem_cost})", mem_col):
+                self._action_upgrade_memory()
             y += BTN_H + 6
         else:
             t = self.font_sm.render("No worker assigned", True, (150, 100, 100))

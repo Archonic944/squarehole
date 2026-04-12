@@ -62,6 +62,7 @@ class FactoryWorker:
         self.class_names: list[str] = []
         self.cached_accuracy: float = 0.0
         self.stats = WorkerStats()
+        self.memory_cap_bonus: int = 0
 
         # Maps ground-truth object categories to this worker's class names.
         # For terminal workers (bins), the mapping is identity (cat -> cat).
@@ -102,11 +103,11 @@ class FactoryWorker:
 
     @property
     def memory_cap(self) -> int:
-        return MEMORY_CAP
+        return MEMORY_CAP + self.memory_cap_bonus
 
     @property
     def is_memory_full(self) -> bool:
-        return self.get_support_set_size() >= MEMORY_CAP
+        return self.get_support_set_size() >= self.memory_cap
 
     def teach(
         self,
