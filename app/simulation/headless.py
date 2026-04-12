@@ -74,14 +74,19 @@ def print_report(name, world, elapsed, ticks):
     return stats
 
 
-CATS_8 = ["circle", "triangle", "star_5", "square", "diamond", "oval", "cross", "heart"]
+# Full 19-shape vocabulary from the spec (5 starter + 5 + 4 + 5 across 3 packs)
+STARTER = ["circle", "triangle", "square", "star_5", "heart"]
+PACK1 = ["arrow", "crescent", "cloud", "lightning", "teardrop"]
+PACK2_HOLES = ["donut", "picture_frame", "key", "gear"]
+PACK3_MULTI = ["mushroom", "tree", "flower", "candy_cane", "rainbow"]
+CATS_19 = STARTER + PACK1 + PACK2_HOLES + PACK3_MULTI
 QUEUE_CAP = 10
 
 
 def make_world(gen, start_objects=1):
     world = FactoryWorld(gen)
     world.economy.coins = 10000
-    world.active_categories = list(CATS_8)
+    world.active_categories = list(CATS_19)
     world._remaining_categories = []
     world.objects_per_tick = start_objects
     return world
@@ -92,52 +97,100 @@ def make_world(gen, start_objects=1):
 # ---------------------------------------------------------------------------
 
 def build_generalist(gen, start_objects=1):
+    """One worker that handles ALL 19 classes."""
     world = make_world(gen, start_objects)
     w = world.hire_worker("Generalist", binary=False)
-    train_terminal_worker(w, gen, CATS_8, examples_per_class=8)
+    train_terminal_worker(w, gen, CATS_19, examples_per_class=6)
     world.graph.add_node("clf", queue_capacity=QUEUE_CAP)
     world.graph.set_root("clf")
     world.assign_worker(w, "clf")
-    for cat in CATS_8:
+    for cat in CATS_19:
         world.graph.connect("clf", cat, f"BIN:{cat}")
     estimate_all(world, gen)
     return world
 
 
 def build_deep_routing(gen, start_objects=1):
+    """Routing tree for the 19-shape vocabulary using spec features.
+
+    Tree:
+        multicolor? → yes → 5-class terminal (Pack 3)
+                     → no  → has-hole? → yes → 4-class terminal (Pack 2)
+                                       → no  → curved? → yes → 5-class terminal (curvy)
+                                                       → no  → 5-class terminal (straight)
+    """
     world = make_world(gen, start_objects)
-    round_cats = ["circle", "oval", "heart"]
-    angular_cats = ["triangle", "star_5", "square", "diamond", "cross"]
-    spikey = ["star_5", "diamond"]
-    blocky = ["triangle", "square", "cross"]
 
-    root = world.hire_worker("Root: Round?", binary=True)
-    sub = world.hire_worker("Sub: Spikey?", binary=True)
-    sr = world.hire_worker("Spec: Round", binary=False)
-    ss = world.hire_worker("Spec: Spikey", binary=False)
-    sb = world.hire_worker("Spec: Blocky", binary=False)
+    # Build the four feature groups
+    multi_cats = list(PACK3_MULTI)            # mushroom, tree, flower, candy_cane, rainbow
+    hole_cats = list(PACK2_HOLES)             # donut, picture_frame, key, gear
+    curvy_cats = ["circle", "heart", "crescent", "cloud", "teardrop"]
+    straight_cats = ["triangle", "square", "star_5", "arrow", "lightning"]
 
-    train_worker_on_concept(root, gen, {"round": round_cats, "angular": angular_cats}, 15)
-    train_worker_on_concept(sub, gen, {"spikey": spikey, "blocky": blocky}, 15)
-    train_terminal_worker(sr, gen, round_cats, 10)
-    train_terminal_worker(ss, gen, spikey, 10)
-    train_terminal_worker(sb, gen, blocky, 10)
+    # Binary routing workers
+    root = world.hire_worker("Root: Multicolor?", binary=True)
+    sub_hole = world.hire_worker("Sub: Has-hole?", binary=True)
+    sub_curve = world.hire_worker("Sub: Curved?", binary=True)
 
-    for nid, w in [("root", root), ("sub", sub), ("sr", sr), ("ss", ss), ("sb", sb)]:
+    # Terminal classifiers (one per leaf group)
+    term_multi = world.hire_worker("Term: Multicolor", binary=False)
+    term_hole = world.hire_worker("Term: Has-hole", binary=False)
+    term_curvy = world.hire_worker("Term: Curvy", binary=False)
+    term_straight = world.hire_worker("Term: Straight", binary=False)
+
+    # Train binary workers on their concept splits
+    rest_after_multi = hole_cats + curvy_cats + straight_cats
+    train_worker_on_concept(
+        root, gen,
+        {"multi": multi_cats, "mono": rest_after_multi}, 12)
+
+    rest_after_hole = curvy_cats + straight_cats
+    train_worker_on_concept(
+        sub_hole, gen,
+        {"hole": hole_cats, "solid": rest_after_hole}, 12)
+
+    train_worker_on_concept(
+        sub_curve, gen,
+        {"curvy": curvy_cats, "straight": straight_cats}, 12)
+
+    # Train terminal workers
+    train_terminal_worker(term_multi, gen, multi_cats, examples_per_class=8)
+    train_terminal_worker(term_hole, gen, hole_cats, examples_per_class=8)
+    train_terminal_worker(term_curvy, gen, curvy_cats, examples_per_class=8)
+    train_terminal_worker(term_straight, gen, straight_cats, examples_per_class=8)
+
+    # Wire the graph
+    nodes = [
+        ("root", root),
+        ("sub_hole", sub_hole),
+        ("sub_curve", sub_curve),
+        ("t_multi", term_multi),
+        ("t_hole", term_hole),
+        ("t_curvy", term_curvy),
+        ("t_straight", term_straight),
+    ]
+    for nid, w in nodes:
         world.graph.add_node(nid, queue_capacity=QUEUE_CAP)
         world.assign_worker(w, nid)
     world.graph.set_root("root")
 
-    world.graph.connect("root", "round", "sr")
-    world.graph.connect("root", "angular", "sub")
-    world.graph.connect("sub", "spikey", "ss")
-    world.graph.connect("sub", "blocky", "sb")
-    for cat in round_cats:
-        world.graph.connect("sr", cat, f"BIN:{cat}")
-    for cat in spikey:
-        world.graph.connect("ss", cat, f"BIN:{cat}")
-    for cat in blocky:
-        world.graph.connect("sb", cat, f"BIN:{cat}")
+    # Routing edges
+    world.graph.connect("root", "multi", "t_multi")
+    world.graph.connect("root", "mono", "sub_hole")
+    world.graph.connect("sub_hole", "hole", "t_hole")
+    world.graph.connect("sub_hole", "solid", "sub_curve")
+    world.graph.connect("sub_curve", "curvy", "t_curvy")
+    world.graph.connect("sub_curve", "straight", "t_straight")
+
+    # Terminal → bin edges (one bin per ground-truth category)
+    for cat in multi_cats:
+        world.graph.connect("t_multi", cat, f"BIN:{cat}")
+    for cat in hole_cats:
+        world.graph.connect("t_hole", cat, f"BIN:{cat}")
+    for cat in curvy_cats:
+        world.graph.connect("t_curvy", cat, f"BIN:{cat}")
+    for cat in straight_cats:
+        world.graph.connect("t_straight", cat, f"BIN:{cat}")
 
     estimate_all(world, gen)
     return world
@@ -218,9 +271,14 @@ def test_early_game(gen):
 
 
 def main():
+    # Pin seeds so model comparisons are reproducible
+    import torch
+    random.seed(42)
+    torch.manual_seed(42)
+
     print("BabyBrain Factory — Balance Validation (Real ML Inference)")
     print("=" * 65)
-    print(f"Categories: {CATS_8}")
+    print(f"Categories ({len(CATS_19)}): {CATS_19}")
     print(f"Speed formula: max(1, 6 - num_classes)")
     print(f"Throughput ramp: +1 object/tick every 100 ticks (1 → 8)")
     print(f"Economy: +15 correct, -3 wrong, -1 drop, -0.3 upkeep/worker")

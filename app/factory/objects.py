@@ -28,7 +28,9 @@ SHAPE_FAMILIES: dict[str, list[str]] = {
     "angular": ["triangle", "right_triangle", "diamond", "parallelogram", "trapezoid"],
     "rounded": ["circle", "oval", "semicircle"],
     "boxy": ["square", "rectangle", "cross"],
-    "organic": ["heart", "crescent"],
+    "organic": ["heart", "crescent", "cloud", "teardrop"],
+    "holed": ["donut", "picture_frame", "key", "gear"],
+    "composite": ["mushroom", "tree", "flower", "candy_cane", "rainbow"],
 }
 
 # Ordered so early categories span different families (easier to distinguish)
@@ -38,6 +40,10 @@ ALL_CATEGORIES: list[str] = [
     "arrow", "rectangle", "semicircle", "crescent",  # varied
     "star_4", "right_triangle", "parallelogram",     # harder
     "star_6", "trapezoid", "lightning",              # hardest
+    # New packs
+    "cloud", "teardrop",
+    "donut", "picture_frame", "key", "gear",
+    "mushroom", "tree", "flower", "candy_cane", "rainbow",
 ]
 
 _CATEGORY_TO_FAMILY: dict[str, str] = {
@@ -286,6 +292,82 @@ def _lightning_vertices(cx: float, cy: float,
     ]
 
 
+def _cloud_vertices(cx: float, cy: float,
+                    size: float) -> list[tuple[float, float]]:
+    """Bumpy round blob built from several overlapping circular lobes."""
+    # A cloud is approximated by sampling the union of 4-5 circles
+    # whose centers sit along a horizontal axis at varying heights.
+    n_lobes = random.randint(4, 5)
+    lobes: list[tuple[float, float, float]] = []  # (cx, cy, r)
+    # Spread lobes horizontally across roughly 1.4*size, keeping overall
+    # extent within +/- size of the center in both axes.
+    span = size * 0.75
+    for i in range(n_lobes):
+        t = i / max(1, n_lobes - 1)  # 0..1
+        lx = cx - span + t * (2 * span)
+        # Middle lobes sit higher, edge lobes sit lower => cloud silhouette
+        bump = math.sin(t * math.pi)   # 0 at edges, 1 in middle
+        ly = cy - bump * size * 0.15 + random.uniform(-size * 0.04, size * 0.04)
+        lr = size * random.uniform(0.42, 0.55)
+        # Middle lobes slightly bigger
+        lr *= 0.85 + bump * 0.25
+        lobes.append((lx, ly, lr))
+
+    # Sample points along the outer perimeter of the union of lobes.
+    n_samples = 96
+    pts: list[tuple[float, float]] = []
+    for i in range(n_samples):
+        a = 2.0 * math.pi * i / n_samples
+        dir_x, dir_y = math.cos(a), math.sin(a)
+        # For each angle, find the farthest point from cx,cy that lies
+        # within any of the lobes.
+        best = 0.0
+        for lx, ly, lr in lobes:
+            # Intersect ray from (cx,cy) in direction (dir_x,dir_y) with
+            # lobe circle. Parametrize as (cx,cy) + t*(dir_x,dir_y).
+            fx = cx - lx
+            fy = cy - ly
+            b = 2.0 * (dir_x * fx + dir_y * fy)
+            c = fx * fx + fy * fy - lr * lr
+            disc = b * b - 4 * c
+            if disc < 0:
+                continue
+            sq = math.sqrt(disc)
+            t1 = (-b + sq) * 0.5
+            if t1 > best:
+                best = t1
+        if best <= 0:
+            best = size * 0.3
+        pts.append((cx + dir_x * best, cy + dir_y * best))
+    # Flatten bottom slightly so the cloud looks right-side-up
+    flat_y = cy + size * 0.35
+    pts = [(x, min(y, flat_y)) for x, y in pts]
+    return pts
+
+
+def _teardrop_vertices(cx: float, cy: float,
+                       size: float) -> list[tuple[float, float]]:
+    """Round at bottom, pointed at top (default orientation)."""
+    n = 64
+    pts: list[tuple[float, float]] = []
+    # Parametrize by angle around the center.  The radius decreases as
+    # we approach the top (negative-y direction) so the shape tapers.
+    for i in range(n):
+        a = 2.0 * math.pi * i / n
+        # angle 0 = right, pi/2 = down, -pi/2 = up (our top)
+        sin_a = math.sin(a)   # +1 at top (up), -1 at bottom
+        # factor is 1 at bottom, 0 near the top point
+        taper = (1.0 - sin_a) * 0.5  # in [0,1]
+        # smooth ease + small power -> pointier tip
+        taper = taper ** 0.85
+        r_x = size * 0.85
+        r_y = size
+        x = cx + r_x * math.cos(a) * taper
+        y = cy - r_y * sin_a
+        pts.append((x, y))
+    return pts
+
+
 # ---------------------------------------------------------------------------
 # Parametric / arc-based shapes (drawn directly, not vertex-based)
 # ---------------------------------------------------------------------------
@@ -392,6 +474,401 @@ def _draw_semicircle(draw: ImageDraw.ImageDraw, cx: float, cy: float,
 
 
 # ---------------------------------------------------------------------------
+# Multi-color / holed shapes (direct draw)
+# ---------------------------------------------------------------------------
+
+def _secondary_color(primary: tuple[int, int, int],
+                     hue_shift: float = 0.4,
+                     sat: float = 0.75,
+                     val: float = 0.8) -> tuple[int, int, int]:
+    """Generate a contrasting color by shifting the primary color's hue."""
+    r, g, b = primary[0] / 255.0, primary[1] / 255.0, primary[2] / 255.0
+    h, _s, _v = colorsys.rgb_to_hsv(r, g, b)
+    new_h = (h + hue_shift) % 1.0
+    nr, ng, nb = colorsys.hsv_to_rgb(new_h, sat, val)
+    return (int(nr * 255), int(ng * 255), int(nb * 255))
+
+
+def _hsv(hue: float, sat: float = 0.85,
+         val: float = 0.85) -> tuple[int, int, int]:
+    r, g, b = colorsys.hsv_to_rgb(hue % 1.0, sat, val)
+    return (int(r * 255), int(g * 255), int(b * 255))
+
+
+def _circle_points(cx: float, cy: float, r: float,
+                   n: int = 48) -> list[tuple[float, float]]:
+    return [
+        (cx + r * math.cos(2.0 * math.pi * i / n),
+         cy + r * math.sin(2.0 * math.pi * i / n))
+        for i in range(n)
+    ]
+
+
+def _draw_donut(draw: ImageDraw.ImageDraw, cx: float, cy: float,
+                size: float, attrs: dict):
+    """A ring: filled outer circle with a concentric hole."""
+    outer_r = size
+    inner_r = size * random.uniform(0.38, 0.55)
+    outer = _circle_points(cx, cy, outer_r, n=64)
+    outer = _transform(outer, attrs, cx, cy)
+    _draw_poly(draw, outer, attrs)
+    # Punch hole using bg color
+    bg = attrs["bg_color"]
+    hole = _circle_points(cx, cy, inner_r, n=48)
+    coords = [(round(x), round(y)) for x, y in hole]
+    draw.polygon(coords, fill=bg)
+
+
+def _draw_picture_frame(draw: ImageDraw.ImageDraw, cx: float, cy: float,
+                        size: float, attrs: dict):
+    """A square outline: filled square with a concentric square hole."""
+    outer = _square_vertices(cx, cy, size)
+    outer = _transform(outer, attrs, cx, cy)
+    _draw_poly(draw, outer, attrs)
+    # Hole
+    inner_size = size * random.uniform(0.55, 0.72)
+    inner = _square_vertices(cx, cy, inner_size)
+    inner = _rotate(inner, attrs["rotation_deg"], cx, cy)
+    bg = attrs["bg_color"]
+    coords = [(round(x), round(y)) for x, y in inner]
+    draw.polygon(coords, fill=bg)
+
+
+def _draw_key(draw: ImageDraw.ImageDraw, cx: float, cy: float,
+              size: float, attrs: dict):
+    """Circular handle on the left + rectangular shaft on the right with notches."""
+    fill = attrs["fill_color"]
+    bg = attrs["bg_color"]
+    rot = attrs["rotation_deg"]
+
+    # Geometry in local (pre-rotation) space
+    handle_cx = cx - size * 0.55
+    handle_cy = cy
+    handle_r = size * 0.55
+    shaft_left = cx - size * 0.05
+    shaft_right = cx + size * 0.95
+    shaft_top = cy - size * 0.16
+    shaft_bottom = cy + size * 0.16
+
+    # Handle (outer circle)
+    handle_pts = _circle_points(handle_cx, handle_cy, handle_r, n=48)
+    handle_pts = _rotate(handle_pts, rot, cx, cy)
+    _draw_poly(draw, handle_pts, attrs)
+
+    # Shaft rectangle + notches on the far (right) end
+    notch_h = size * 0.22
+    notch_w = size * 0.18
+    # Build a single polygon that forms the shaft with 1-2 teeth on the bottom
+    n_notches = random.randint(1, 2)
+    shaft_pts: list[tuple[float, float]] = []
+    # Start top-left, go clockwise
+    shaft_pts.append((shaft_left, shaft_top))
+    shaft_pts.append((shaft_right, shaft_top))
+    shaft_pts.append((shaft_right, shaft_bottom))
+    # Walk back along the bottom, adding notches (teeth extending downward)
+    x_cursor = shaft_right
+    step = size * 0.28
+    for i in range(n_notches):
+        notch_right = x_cursor - step * i - size * 0.05
+        notch_left = notch_right - notch_w
+        if notch_left <= shaft_left + size * 0.1:
+            break
+        shaft_pts.append((notch_right, shaft_bottom))
+        shaft_pts.append((notch_right, shaft_bottom + notch_h))
+        shaft_pts.append((notch_left, shaft_bottom + notch_h))
+        shaft_pts.append((notch_left, shaft_bottom))
+    shaft_pts.append((shaft_left, shaft_bottom))
+    shaft_pts = _rotate(shaft_pts, rot, cx, cy)
+    _draw_poly(draw, shaft_pts, attrs)
+
+    # Hole in the handle (bg color)
+    hole_r = handle_r * random.uniform(0.35, 0.5)
+    hole_pts = _circle_points(handle_cx, handle_cy, hole_r, n=36)
+    hole_pts = _rotate(hole_pts, rot, cx, cy)
+    coords = [(round(x), round(y)) for x, y in hole_pts]
+    draw.polygon(coords, fill=bg)
+
+
+def _draw_gear(draw: ImageDraw.ImageDraw, cx: float, cy: float,
+               size: float, attrs: dict):
+    """Circle with rectangular teeth around the perimeter and a center hole."""
+    n_teeth = 8
+    body_r = size * 0.78
+    tooth_outer = size
+    # Build the gear outline by alternating between body_r (between teeth)
+    # and tooth_outer (tooth tip), with flat segments for the sides of
+    # each tooth.
+    pts: list[tuple[float, float]] = []
+    # 2 points per tooth sector: (base_start, tip_start, tip_end, base_end)
+    # We use n_teeth*4 points around the circle.
+    n = n_teeth * 4
+    for i in range(n):
+        frac = i / n
+        a = 2.0 * math.pi * frac - math.pi / 2
+        phase = i % 4  # 0 base_start, 1 tip_start, 2 tip_end, 3 base_end
+        if phase == 0 or phase == 3:
+            r = body_r
+        else:
+            r = tooth_outer
+        pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+    pts = _rotate(pts, attrs["rotation_deg"], cx, cy)
+    _draw_poly(draw, pts, attrs)
+
+    # Center hole (bg)
+    hole_r = size * random.uniform(0.22, 0.32)
+    hole = _circle_points(cx, cy, hole_r, n=36)
+    hole = _rotate(hole, attrs["rotation_deg"], cx, cy)
+    bg = attrs["bg_color"]
+    coords = [(round(x), round(y)) for x, y in hole]
+    draw.polygon(coords, fill=bg)
+
+
+def _draw_mushroom(draw: ImageDraw.ImageDraw, cx: float, cy: float,
+                   size: float, attrs: dict):
+    """Dome cap on top of a rectangular stem (two colors)."""
+    cap_color = attrs["fill_color"]
+    stem_color = _secondary_color(cap_color, hue_shift=0.5, sat=0.35, val=0.9)
+    rot = attrs["rotation_deg"]
+
+    # Cap: top half of an ellipse wider than it is tall
+    cap_rx = size
+    cap_ry = size * 0.7
+    cap_cy = cy - size * 0.15
+    cap_pts: list[tuple[float, float]] = []
+    n = 48
+    for i in range(n + 1):
+        a = math.pi * i / n  # 0..pi sweeps the top half
+        cap_pts.append((cx + cap_rx * math.cos(a),
+                        cap_cy - cap_ry * math.sin(a)))
+    # Flat bottom of the cap
+    cap_pts.append((cx - cap_rx, cap_cy))
+    cap_pts = _rotate(cap_pts, rot, cx, cy)
+    coords = [(round(x), round(y)) for x, y in cap_pts]
+    draw.polygon(coords, fill=cap_color)
+
+    # Stem: rectangle attached under the cap
+    stem_w = size * 0.45
+    stem_top = cap_cy
+    stem_bottom = cy + size * 0.85
+    stem_pts = [
+        (cx - stem_w, stem_top),
+        (cx + stem_w, stem_top),
+        (cx + stem_w, stem_bottom),
+        (cx - stem_w, stem_bottom),
+    ]
+    stem_pts = _rotate(stem_pts, rot, cx, cy)
+    coords = [(round(x), round(y)) for x, y in stem_pts]
+    draw.polygon(coords, fill=stem_color)
+
+
+def _draw_tree(draw: ImageDraw.ImageDraw, cx: float, cy: float,
+               size: float, attrs: dict):
+    """Triangular green canopy on top of a brown rectangular trunk."""
+    rot = attrs["rotation_deg"]
+    # Green canopy (hue around 0.3), some variation in value/saturation
+    canopy_color = _hsv(random.uniform(0.28, 0.38),
+                        sat=random.uniform(0.65, 0.9),
+                        val=random.uniform(0.55, 0.8))
+    # Brown trunk (hue around 0.08)
+    trunk_color = _hsv(random.uniform(0.06, 0.1),
+                       sat=random.uniform(0.55, 0.8),
+                       val=random.uniform(0.4, 0.6))
+
+    # Canopy triangle occupies the top ~75% of the frame
+    canopy_top = cy - size
+    canopy_bottom = cy + size * 0.4
+    canopy_half = size * 0.85
+    canopy_pts = [
+        (cx, canopy_top),
+        (cx + canopy_half, canopy_bottom),
+        (cx - canopy_half, canopy_bottom),
+    ]
+    canopy_pts = _rotate(canopy_pts, rot, cx, cy)
+    coords = [(round(x), round(y)) for x, y in canopy_pts]
+    draw.polygon(coords, fill=canopy_color)
+
+    # Trunk rectangle below the canopy
+    trunk_w = size * 0.25
+    trunk_top = canopy_bottom
+    trunk_bottom = cy + size
+    trunk_pts = [
+        (cx - trunk_w, trunk_top),
+        (cx + trunk_w, trunk_top),
+        (cx + trunk_w, trunk_bottom),
+        (cx - trunk_w, trunk_bottom),
+    ]
+    trunk_pts = _rotate(trunk_pts, rot, cx, cy)
+    coords = [(round(x), round(y)) for x, y in trunk_pts]
+    draw.polygon(coords, fill=trunk_color)
+
+
+def _draw_flower(draw: ImageDraw.ImageDraw, cx: float, cy: float,
+                 size: float, attrs: dict):
+    """Multi-colored petals radiating from a central disc."""
+    rot_base = attrs["rotation_deg"]
+    n_petals = random.randint(5, 6)
+    petal_color = attrs["fill_color"]
+    # Center color is a contrasting hue (e.g., yellow if petals are pink)
+    center_color = _secondary_color(petal_color, hue_shift=random.uniform(0.3, 0.6),
+                                    sat=0.85, val=0.95)
+
+    petal_r = size * 0.4  # petal half-length (each petal ~2*petal_r long)
+    petal_dist = size * 0.55  # distance from center to petal center
+    petal_w = size * 0.32
+
+    for i in range(n_petals):
+        a = 2.0 * math.pi * i / n_petals + math.radians(rot_base)
+        pcx = cx + petal_dist * math.cos(a)
+        pcy = cy + petal_dist * math.sin(a)
+        # Build an ellipse oriented along the radial direction
+        n = 24
+        pts: list[tuple[float, float]] = []
+        for j in range(n):
+            t = 2.0 * math.pi * j / n
+            # Ellipse with long axis along angle a
+            ex = petal_r * math.cos(t)
+            ey = petal_w * math.sin(t)
+            cos_a, sin_a = math.cos(a), math.sin(a)
+            px = pcx + ex * cos_a - ey * sin_a
+            py = pcy + ex * sin_a + ey * cos_a
+            pts.append((px, py))
+        coords = [(round(x), round(y)) for x, y in pts]
+        draw.polygon(coords, fill=petal_color)
+
+    # Central disc
+    center_r = size * 0.32
+    center_pts = _circle_points(cx, cy, center_r, n=48)
+    coords = [(round(x), round(y)) for x, y in center_pts]
+    draw.polygon(coords, fill=center_color)
+
+
+def _draw_candy_cane(draw: ImageDraw.ImageDraw, cx: float, cy: float,
+                     size: float, attrs: dict):
+    """Red-and-white J-shaped cane with diagonal stripes."""
+    rot = attrs["rotation_deg"]
+    # Red-ish primary (could vary a bit)
+    red = _hsv(random.uniform(0.97, 1.02) % 1.0, sat=0.85, val=0.9)
+    white = (245, 245, 245)
+
+    # Build the cane as a thick stroked path:
+    # vertical shaft down the right, rounded hook at the top curving left.
+    thickness = size * 0.34
+    shaft_x = cx + size * 0.35
+    shaft_top = cy - size * 0.25
+    shaft_bottom = cy + size
+    hook_center_x = shaft_x - size * 0.6
+    hook_center_y = shaft_top
+    hook_r = size * 0.6
+
+    # Sample centerline: start at bottom of shaft, go up to top of shaft,
+    # then arc left around the hook center.
+    centerline: list[tuple[float, float]] = []
+    n_shaft = 20
+    for i in range(n_shaft + 1):
+        t = i / n_shaft
+        centerline.append((shaft_x, shaft_bottom + (shaft_top - shaft_bottom) * t))
+    n_arc = 24
+    for i in range(1, n_arc + 1):
+        a = -math.pi / 2 * (1 - i / n_arc) + math.pi * (i / n_arc)
+        # start angle: 0 (pointing right from hook_center -> shaft_top)
+        # end angle: pi (pointing left)
+        # Parametrize i=0 -> 0, i=n_arc -> pi
+        angle = math.pi * i / n_arc
+        centerline.append((hook_center_x + hook_r * math.cos(angle),
+                           hook_center_y - hook_r * math.sin(angle)))
+
+    # Build a thick polygon by offsetting the centerline left/right
+    left_side: list[tuple[float, float]] = []
+    right_side: list[tuple[float, float]] = []
+    for i in range(len(centerline)):
+        x, y = centerline[i]
+        # Compute tangent
+        if i == 0:
+            nx_, ny_ = centerline[1]
+            tx, ty = nx_ - x, ny_ - y
+        elif i == len(centerline) - 1:
+            px, py = centerline[i - 1]
+            tx, ty = x - px, y - py
+        else:
+            nx_, ny_ = centerline[i + 1]
+            px, py = centerline[i - 1]
+            tx, ty = nx_ - px, ny_ - py
+        length = math.hypot(tx, ty) or 1.0
+        # Normal is perpendicular
+        nx = -ty / length
+        ny = tx / length
+        left_side.append((x + nx * thickness * 0.5,
+                          y + ny * thickness * 0.5))
+        right_side.append((x - nx * thickness * 0.5,
+                           y - ny * thickness * 0.5))
+
+    outline_pts = left_side + list(reversed(right_side))
+    outline_pts = _rotate(outline_pts, rot, cx, cy)
+    coords = [(round(x), round(y)) for x, y in outline_pts]
+    # Fill base with white, then overlay red stripes clipped to this polygon.
+    draw.polygon(coords, fill=white)
+
+    # Draw diagonal red stripes across the full canvas, clipped by the
+    # cane polygon via a mask image.
+    stripe_img = Image.new("RGB", (CANVAS_SIZE, CANVAS_SIZE), white)
+    stripe_draw = ImageDraw.Draw(stripe_img)
+    stripe_spacing = max(6, int(size * 0.35))
+    stripe_width = max(3, int(size * 0.18))
+    # Diagonal stripes running 45 degrees
+    for offset in range(-CANVAS_SIZE, CANVAS_SIZE * 2, stripe_spacing):
+        stripe_draw.line(
+            [(offset, 0), (offset + CANVAS_SIZE, CANVAS_SIZE)],
+            fill=red, width=stripe_width,
+        )
+
+    mask = Image.new("L", (CANVAS_SIZE, CANVAS_SIZE), 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.polygon(coords, fill=255)
+    # Paste stripes onto the main image wherever the mask is set.
+    base = draw._image  # type: ignore[attr-defined]
+    base.paste(stripe_img, (0, 0), mask)
+
+
+def _draw_rainbow(draw: ImageDraw.ImageDraw, cx: float, cy: float,
+                  size: float, attrs: dict):
+    """An upward-arched set of nested colored arcs."""
+    rot = attrs["rotation_deg"]
+    colors = [
+        _hsv(0.0, sat=0.85, val=0.9),   # red
+        _hsv(0.08, sat=0.85, val=0.95),  # orange
+        _hsv(0.15, sat=0.85, val=0.95),  # yellow
+        _hsv(0.33, sat=0.8, val=0.75),   # green
+        _hsv(0.6, sat=0.85, val=0.85),   # blue
+    ]
+    # Base of arch below center so the arch rises
+    base_y = cy + size * 0.55
+    outer_r = size
+    # Step per band
+    n_bands = len(colors)
+    band_w = outer_r / (n_bands + 1) * 0.9
+
+    for i, color in enumerate(colors):
+        r_outer = outer_r - i * band_w
+        r_inner = r_outer - band_w
+        if r_inner <= 0:
+            continue
+        # Build annular sector: outer half-circle + inner half-circle (reversed)
+        pts: list[tuple[float, float]] = []
+        n = 40
+        for j in range(n + 1):
+            a = math.pi * j / n  # 0..pi sweeps left to right along top
+            pts.append((cx + r_outer * math.cos(a),
+                        base_y - r_outer * math.sin(a)))
+        for j in range(n, -1, -1):
+            a = math.pi * j / n
+            pts.append((cx + r_inner * math.cos(a),
+                        base_y - r_inner * math.sin(a)))
+        pts = _rotate(pts, rot, cx, cy)
+        coords = [(round(x), round(y)) for x, y in pts]
+        draw.polygon(coords, fill=color)
+
+
+# ---------------------------------------------------------------------------
 # Drawing helpers
 # ---------------------------------------------------------------------------
 
@@ -432,6 +909,8 @@ _POLYGON_SHAPES: dict[str, object] = {
     "cross": _cross_vertices,
     "arrow": _arrow_vertices,
     "lightning": _lightning_vertices,
+    "cloud": _cloud_vertices,
+    "teardrop": _teardrop_vertices,
 }
 
 _DIRECT_DRAW_SHAPES: dict[str, object] = {
@@ -440,6 +919,15 @@ _DIRECT_DRAW_SHAPES: dict[str, object] = {
     "circle": _draw_circle,
     "oval": _draw_oval,
     "semicircle": _draw_semicircle,
+    "donut": _draw_donut,
+    "picture_frame": _draw_picture_frame,
+    "key": _draw_key,
+    "gear": _draw_gear,
+    "mushroom": _draw_mushroom,
+    "tree": _draw_tree,
+    "flower": _draw_flower,
+    "candy_cane": _draw_candy_cane,
+    "rainbow": _draw_rainbow,
 }
 
 

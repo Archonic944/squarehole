@@ -15,9 +15,8 @@ if TYPE_CHECKING:
 _CHECKPOINT_DIR = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "models", "checkpoints")
 )
-GENERAL_CHECKPOINT = os.path.join(_CHECKPOINT_DIR, "general_conv4_192_robust.pt")
-GENERAL_CHECKPOINT_192 = os.path.join(_CHECKPOINT_DIR, "general_conv4_192.pt")
-GENERAL_CHECKPOINT_128 = os.path.join(_CHECKPOINT_DIR, "general_conv4_128.pt")
+GENERAL_CHECKPOINT = os.path.join(_CHECKPOINT_DIR, "general_conv4_64_robust.pt")
+GENERAL_CHECKPOINT_64 = os.path.join(_CHECKPOINT_DIR, "general_conv4_64.pt")
 # Fallback to legacy task-specific checkpoint if no general checkpoint exists
 WHATS_CHECKPOINT = os.path.join(_CHECKPOINT_DIR, "whats_this_maml.pt")
 
@@ -26,8 +25,7 @@ def resolve_worker_checkpoint() -> str:
     """Return the best available checkpoint path for runtime workers."""
     for path in (
         GENERAL_CHECKPOINT,
-        GENERAL_CHECKPOINT_192,
-        GENERAL_CHECKPOINT_128,
+        GENERAL_CHECKPOINT_64,
         WHATS_CHECKPOINT,
     ):
         if os.path.exists(path):

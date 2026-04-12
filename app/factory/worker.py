@@ -66,7 +66,7 @@ class FactoryWorker:
         self._support_set: dict[str, list[torch.Tensor]] = defaultdict(list)
 
         # Build model and wrap in MAML
-        self.hidden = 192  # match the runtime general checkpoint
+        self.hidden = 64  # match the runtime general checkpoint (Conv4-64, ~113K params)
         self._base_model = Conv4WithHead(num_classes=num_classes, hidden=self.hidden).to(self.device)
         self._maml = l2l.algorithms.MAML(
             self._base_model, lr=INNER_LR, first_order=True
@@ -149,6 +149,9 @@ class FactoryWorker:
         more gradient steps to converge. This keeps both accuracy and
         stability high regardless of how many examples the player provides.
 
+        After adapting, the learner is switched to evaluation mode so that
+        BatchNorm layers use running statistics during single-image
+        inference (BN in training mode with batch=1 produces noise).
         The result is cached until the support set changes.
         """
         learner = self._maml.clone()
@@ -158,10 +161,15 @@ class FactoryWorker:
             # Scale: 5 steps for ~10 examples, ~15 steps for ~60 examples
             steps = max(BASE_INNER_STEPS, BASE_INNER_STEPS + (n_examples - 10) // 4)
             steps = min(steps, 20)  # cap to avoid slowness
+            # Training mode during adapt — matches meta-training setup
+            learner.train(True)
             for _ in range(steps):
                 preds = learner(imgs)
                 loss = F.cross_entropy(preds, labels)
                 learner.adapt(loss)
+        # Switch to evaluation mode so BatchNorm uses running stats from
+        # meta-training. Otherwise BN with batch=1 collapses to noise.
+        learner.train(False)
         self._adapted_learner = learner
         self._needs_readapt = False
 

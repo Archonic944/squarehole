@@ -38,6 +38,10 @@ def main():
                         help="Support examples per class")
     parser.add_argument("--query", type=int, default=5,
                         help="Query examples per class")
+    parser.add_argument("--save-name", type=str, default=None,
+                        help="Output filename (default: general_conv4_{hidden}.pt)")
+    parser.add_argument("--save-every", type=int, default=100,
+                        help="Save a snapshot checkpoint every N iterations (0 to disable)")
     args = parser.parse_args()
 
     # Device
@@ -61,14 +65,21 @@ def main():
 
     dataset = ProceduralMetaDataset(n_support=args.support, n_query=args.query)
 
+    os.makedirs(CKPT_DIR, exist_ok=True)
+    save_name = args.save_name or f"general_conv4_{args.hidden}.pt"
+    stem, ext = os.path.splitext(save_name)
+    if not ext:
+        ext = ".pt"
+
     print(f"\nTraining: {args.iterations} iterations, "
           f"{args.tasks_per_batch} tasks/batch, "
           f"{args.inner_steps} inner steps")
     print(f"Episodes: {args.support}-shot support, {args.query}-shot query")
+    print(f"Snapshot every {args.save_every} iters → {stem}_iterNNNN{ext}")
+    print(f"Final → {save_name}   (pick true best via eval_features.py)")
     print()
 
     t0 = time.time()
-    best_acc = 0.0
 
     for iteration in range(1, args.iterations + 1):
         optimizer.zero_grad()
@@ -100,8 +111,13 @@ def main():
         optimizer.step()
 
         avg_acc = meta_acc / args.tasks_per_batch
-        if avg_acc > best_acc:
-            best_acc = avg_acc
+
+        # Periodic snapshots — eval_features.py will pick the true best afterwards
+        if args.save_every > 0 and iteration % args.save_every == 0:
+            snap_path = os.path.join(
+                CKPT_DIR, f"{stem}_iter{iteration:04d}{ext}")
+            torch.save(maml.state_dict(), snap_path)
+            print(f"  [snapshot: {os.path.basename(snap_path)}]", flush=True)
 
         if iteration % 50 == 0:
             elapsed = time.time() - t0
@@ -109,17 +125,15 @@ def main():
             print(f"Iter {iteration:>5}/{args.iterations} | "
                   f"Loss: {avg_loss:.4f} | "
                   f"Acc: {avg_acc:.2%} | "
-                  f"Best: {best_acc:.2%} | "
                   f"Time: {elapsed:.0f}s",
                   flush=True)
 
-    # Save
-    os.makedirs(CKPT_DIR, exist_ok=True)
-    ckpt_path = os.path.join(CKPT_DIR, f"general_conv4_{args.hidden}.pt")
+    # Save the final state (last iteration)
+    ckpt_path = os.path.join(CKPT_DIR, save_name)
     torch.save(maml.state_dict(), ckpt_path)
-    print(f"\nCheckpoint saved to {ckpt_path}")
+    print(f"\nFinal checkpoint saved to {ckpt_path}")
     print(f"Total time: {time.time() - t0:.0f}s")
-    print(f"Best accuracy: {best_acc:.2%}")
+    print("\nNext: run eval_features.py on each snapshot to pick the winner.")
 
 
 if __name__ == "__main__":
