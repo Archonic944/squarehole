@@ -1182,6 +1182,18 @@ def main():
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--log-every", type=int, default=50)
     parser.add_argument("--save-name", type=str, default=None)
+    parser.add_argument(
+        "--save-threshold",
+        type=float,
+        default=0.80,
+        help="Save extra checkpoints when accuracy is >= this value",
+    )
+    parser.add_argument(
+        "--save-interval",
+        type=int,
+        default=50,
+        help="Check/save threshold checkpoint every N iterations",
+    )
     # Backward-compatible no-op flag from earlier version of this script.
     parser.add_argument("--contract-mix", type=float, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -1206,6 +1218,8 @@ def main():
     instance_ratio = max(0.05, min(0.95, args.instance_ratio))
     legacy_shape_ratio = max(0.0, min(0.90, args.legacy_shape_ratio))
     augment_prob = max(0.0, min(1.0, args.augment_prob))
+    save_threshold = max(0.0, min(1.0, args.save_threshold))
+    save_interval = max(1, int(args.save_interval))
 
     print(f"Device: {device}")
     print(f"Backbone: Conv4-{args.hidden} ({args.hidden * 5 * 5}-dim features)")
@@ -1217,13 +1231,20 @@ def main():
 
     maml = l2l.algorithms.MAML(model, lr=args.inner_lr, first_order=True)
     optimizer = torch.optim.AdamW(maml.parameters(), lr=args.outer_lr, weight_decay=1e-4)
+    os.makedirs(CKPT_DIR, exist_ok=True)
+    save_name = args.save_name or f"general_conv4_{args.hidden}_robust.pt"
+    base_ckpt_path = os.path.join(CKPT_DIR, save_name)
+    stem, ext = os.path.splitext(save_name)
+    if not ext:
+        ext = ".pt"
 
     print(
         f"\nTraining {args.iterations} iterations | "
         f"{args.tasks_per_batch} tasks/batch | "
         f"{args.support}-shot/{args.query}-query (per class) | "
         f"legacy_shape_ratio={legacy_shape_ratio:.2f} | "
-        f"instance_ratio={instance_ratio:.2f} | augment_prob={augment_prob:.2f}\n"
+        f"instance_ratio={instance_ratio:.2f} | augment_prob={augment_prob:.2f} | "
+        f"save>= {save_threshold:.0%} every {save_interval} iters\n"
     )
 
     t0 = time.time()
@@ -1275,6 +1296,15 @@ def main():
             best_acc = avg_acc
             best_state = {k: v.detach().cpu().clone() for k, v in maml.state_dict().items()}
 
+        if iteration % save_interval == 0 and avg_acc >= save_threshold:
+            acc_pct = avg_acc * 100.0
+            threshold_ckpt_path = os.path.join(
+                CKPT_DIR,
+                f"{stem}_iter{iteration:05d}_acc{acc_pct:05.2f}{ext}",
+            )
+            torch.save(maml.state_dict(), threshold_ckpt_path)
+            print(f"Saved threshold checkpoint: {threshold_ckpt_path}", flush=True)
+
         if iteration % args.log_every == 0:
             elapsed = time.time() - t0
             print(
@@ -1286,12 +1316,9 @@ def main():
                 flush=True,
             )
 
-    os.makedirs(CKPT_DIR, exist_ok=True)
-    save_name = args.save_name or f"general_conv4_{args.hidden}_robust.pt"
-    ckpt_path = os.path.join(CKPT_DIR, save_name)
-    torch.save(best_state if best_state is not None else maml.state_dict(), ckpt_path)
+    torch.save(best_state if best_state is not None else maml.state_dict(), base_ckpt_path)
 
-    print(f"\nSaved: {ckpt_path}")
+    print(f"\nSaved: {base_ckpt_path}")
     print(f"Total time: {time.time() - t0:.0f}s")
     print(f"Best meta-batch acc: {best_acc:.2%}")
 
