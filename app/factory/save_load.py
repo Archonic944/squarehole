@@ -123,7 +123,7 @@ def load_game(path: str, device: str = "cpu") -> FactoryWorld:
         for cls_name in wd_worker["class_names"]:
             tensors = wd_worker["support_set"].get(cls_name, [])
             for t in tensors:
-                w.teach(t.to(device), cls_name)
+                w.teach(t.to(device), cls_name, force=True)
         w.role = wd_worker["role"]
         w.cached_accuracy = wd_worker["cached_accuracy"]
         w.category_mapping = dict(wd_worker["category_mapping"])

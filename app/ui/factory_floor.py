@@ -1399,7 +1399,7 @@ class FactoryFloorUI:
             surface.blit(t, (BTN_X, y))
             y += 16
 
-            t = self.font_sm.render(f"Support: {w.get_support_set_size()} examples", True, (80, 80, 80))
+            t = self.font_sm.render(f"Memory: {w.get_support_set_size()} / {w.memory_cap}", True, (80, 80, 80))
             surface.blit(t, (BTN_X, y))
             y += 16
 
@@ -1839,7 +1839,16 @@ class FactoryFloorUI:
         # Support set preview with thumbnails + delete buttons
         if worker.class_names:
             label_y += 5
-            t = self.font_sm.render("Support set:", True, subtle)
+            used = worker.get_support_set_size()
+            cap = worker.memory_cap
+            if used >= cap:
+                mem_color = (220, 80, 80)
+            elif used >= cap - 3:
+                mem_color = (230, 170, 60)
+            else:
+                mem_color = subtle
+            t = self.font_sm.render(
+                f"Memory: {used} / {cap}", True, mem_color)
             surface.blit(t, (label_x, label_y))
             label_y += 16
             thumb_sz = 28
@@ -1893,7 +1902,9 @@ class FactoryFloorUI:
                 scaled = pygame.transform.smoothscale(g_surf, (thumb_sz, thumb_sz))
                 surface.blit(scaled, (tx, ty))
                 pygame.draw.rect(surface, (100, 100, 100), (tx, ty, thumb_sz, thumb_sz), 1)
-                if self._click_pos and pygame.Rect(tx, ty, thumb_sz, thumb_sz).collidepoint(self._click_pos):
+                if (self._click_pos
+                        and pygame.Rect(tx, ty, thumb_sz, thumb_sz).collidepoint(self._click_pos)
+                        and not worker.is_memory_full):
                     self._train_submit_from_gallery(gi)
             rows = min(3, (min(len(self._gallery), 12) + 3) // 4)
             label_y += rows * (thumb_sz + 3) + 5
@@ -1903,9 +1914,18 @@ class FactoryFloorUI:
         has_classes = bool(worker.class_names)
 
         if has_classes:
-            if self._draw_btn_raw(surface, pygame.Rect(310, btn_y, 150, 36),
-                                  "Add Example", (80, 160, 80)):
-                self._train_submit_drawing()
+            add_rect = pygame.Rect(310, btn_y, 150, 36)
+            if worker.is_memory_full:
+                # Disabled: flat gray, no hover, no click
+                pygame.draw.rect(surface, (90, 90, 90), add_rect, border_radius=5)
+                pygame.draw.rect(surface, (0, 0, 0), add_rect, 1, border_radius=5)
+                t = self.font_sm.render("Memory Full", True, (180, 180, 180))
+                surface.blit(t, (add_rect.x + (add_rect.width - t.get_width()) // 2,
+                                 add_rect.y + (add_rect.height - t.get_height()) // 2))
+            else:
+                if self._draw_btn_raw(surface, add_rect,
+                                      "Add Example", (80, 160, 80)):
+                    self._train_submit_drawing()
 
         if self._draw_btn_raw(surface, pygame.Rect(490, btn_y, 120, 36),
                               "Done", (160, 100, 100)):

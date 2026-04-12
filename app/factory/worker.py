@@ -14,6 +14,13 @@ from ..models.conv4 import Conv4WithHead
 INNER_LR = 0.01
 BASE_INNER_STEPS = 5  # for ~10 examples; scales up with support set size
 
+# Hard ceiling on the total number of support-set examples a single worker
+# can hold. This forces the few-shot regime the backbone was meta-trained
+# for and makes routing trees the only way to scale beyond a handful of
+# classes — a generalist trying to learn 19 classes can only give each
+# class ~1 example and will be catastrophically bad.
+MEMORY_CAP = 10
+
 _CHECKPOINT_DIR = os.path.join(
     os.path.dirname(__file__), "..", "models", "checkpoints"
 )
@@ -93,13 +100,33 @@ class FactoryWorker:
     # Teaching
     # ------------------------------------------------------------------
 
-    def teach(self, image_tensor: torch.Tensor, class_name: str):
+    @property
+    def memory_cap(self) -> int:
+        return MEMORY_CAP
+
+    @property
+    def is_memory_full(self) -> bool:
+        return self.get_support_set_size() >= MEMORY_CAP
+
+    def teach(
+        self,
+        image_tensor: torch.Tensor,
+        class_name: str,
+        force: bool = False,
+    ) -> bool:
         """Add a training example. Maps *class_name* to an integer index.
 
-        If the class is new the classification head is rebuilt so the output
-        dimension matches the current number of classes.  Any cached
-        adaptation is invalidated.
+        Returns True if the example was accepted, False if the worker's
+        memory is full. Pass ``force=True`` to bypass the cap (used by
+        save/load so old saves don't lose examples).
+
+        If the class is new the classification head is rebuilt so the
+        output dimension matches the current number of classes. Any
+        cached adaptation is invalidated.
         """
+        if not force and self.is_memory_full:
+            return False
+
         if class_name not in self.class_names:
             self.class_names.append(class_name)
             self._rebuild_head()
@@ -112,6 +139,7 @@ class FactoryWorker:
             len(self._support_set[c]) > 0 for c in self.class_names
         ):
             self.role = "worker"
+        return True
 
     def _rebuild_head(self):
         """Rebuild the classification head to match the current class count."""

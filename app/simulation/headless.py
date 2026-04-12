@@ -22,26 +22,43 @@ from app.factory.economy import Economy
 from app.factory.world import FactoryWorld
 
 
-def train_worker_on_concept(worker, generator, concept_mapping, examples_per_class=10):
-    """Train a worker on a user-defined concept with balanced sampling."""
+def train_worker_on_concept(worker, generator, concept_mapping, examples_per_class=None):
+    """Train a worker on a user-defined concept, capped at worker.memory_cap.
+
+    Fills memory round-robin across the source categories, distributing
+    evenly across concept labels. Examples are spread across ground-truth
+    categories (not just concept labels) so each concept sees variety.
+    """
     cat_to_concept = {}
+    all_items = []  # (category, concept_label)
     for concept_name, categories in concept_mapping.items():
         for cat in categories:
             cat_to_concept[cat] = concept_name
-        per_cat = max(2, examples_per_class // len(categories))
-        for cat in categories:
-            for _ in range(per_cat):
-                obj = generator.generate(cat)
-                worker.teach(obj.tensor, concept_name)
+            all_items.append((cat, concept_name))
+    # Round-robin teach until memory is full
+    i = 0
+    while not worker.is_memory_full and all_items:
+        cat, label = all_items[i % len(all_items)]
+        obj = generator.generate(cat)
+        if not worker.teach(obj.tensor, label):
+            break
+        i += 1
     worker.category_mapping = cat_to_concept
 
 
-def train_terminal_worker(worker, generator, categories, examples_per_class=10):
-    """Train a terminal worker on specific categories."""
-    for cat in categories:
-        for _ in range(examples_per_class):
-            obj = generator.generate(cat)
-            worker.teach(obj.tensor, cat)
+def train_terminal_worker(worker, generator, categories, examples_per_class=None):
+    """Train a terminal worker on specific categories, capped at worker.memory_cap.
+
+    Fills memory round-robin across categories so each class gets an
+    approximately equal share of the cap.
+    """
+    i = 0
+    while not worker.is_memory_full and categories:
+        cat = categories[i % len(categories)]
+        obj = generator.generate(cat)
+        if not worker.teach(obj.tensor, cat):
+            break
+        i += 1
     worker.category_mapping = {cat: cat for cat in categories}
 
 
