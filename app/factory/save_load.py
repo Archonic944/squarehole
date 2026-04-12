@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import re
 from collections import defaultdict
+from dataclasses import dataclass
 
 import torch
 
@@ -12,6 +14,54 @@ from .economy import Economy
 from .routing import RoutingGraph, RoutingNode, RoutingEdge
 from .worker import FactoryWorker
 from .world import FactoryWorld, resolve_worker_checkpoint
+
+
+@dataclass
+class SaveInfo:
+    name: str
+    path: str
+    mtime: float
+    size: int
+
+
+def saves_dir() -> str:
+    d = os.path.expanduser("~/.babybrain/saves")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def sanitize_save_name(name: str) -> str:
+    name = name.strip()
+    name = re.sub(r"[^A-Za-z0-9_\- ]", "", name)
+    return name[:40]
+
+
+def save_path_for(name: str) -> str:
+    return os.path.join(saves_dir(), f"{name}.pt")
+
+
+def list_saves() -> list[SaveInfo]:
+    d = saves_dir()
+    out: list[SaveInfo] = []
+    for fn in os.listdir(d):
+        if not fn.endswith(".pt"):
+            continue
+        p = os.path.join(d, fn)
+        try:
+            st = os.stat(p)
+        except OSError:
+            continue
+        out.append(SaveInfo(name=fn[:-3], path=p, mtime=st.st_mtime, size=st.st_size))
+    out.sort(key=lambda s: s.mtime, reverse=True)
+    return out
+
+
+def delete_save(name: str) -> bool:
+    p = save_path_for(name)
+    if os.path.exists(p):
+        os.remove(p)
+        return True
+    return False
 
 
 def save_game(world: FactoryWorld, path: str) -> None:

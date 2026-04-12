@@ -326,6 +326,8 @@ DIALOG_TEXT = 3
 DIALOG_SELECT = 4
 CONTRACTS = 5
 SHAPE_PREVIEW = 6
+SAVE_DIALOG = 7
+LOAD_DIALOG = 8
 
 
 class FactoryFloorUI:
@@ -399,6 +401,12 @@ class FactoryFloorUI:
         self._shapes_page_sig: tuple[str, ...] = ()
         self._preview_category: str | None = None
         self._preview_just_opened = False
+
+        # Save/load dialogs
+        self._save_name_input = ""
+        self._save_list_cache: list = []
+        self._load_selected: str | None = None
+        self._save_overwrite_pending = False
 
     def _init_fonts(self):
         if not self._fonts_ready:
@@ -685,17 +693,35 @@ class FactoryFloorUI:
             self._handle_connecting_click()
 
         # Suppress click for background UI when overlay is active
-        if self.state in (TRAINING, DIALOG_TEXT, DIALOG_SELECT, CONTRACTS, SHAPE_PREVIEW):
+        if self.state in (TRAINING, DIALOG_TEXT, DIALOG_SELECT, CONTRACTS, SHAPE_PREVIEW, SAVE_DIALOG, LOAD_DIALOG):
             self._bg_click_suppressed = True
         else:
             self._bg_click_suppressed = False
 
-        # ESC closes the contracts / shape preview overlays
-        if self.state in (CONTRACTS, SHAPE_PREVIEW):
+        # ESC closes the contracts / shape preview / save / load overlays
+        if self.state in (CONTRACTS, SHAPE_PREVIEW, LOAD_DIALOG):
             for e in events:
                 if e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE:
                     self.state = IDLE
                     self._preview_category = None
+
+        # Save dialog text input
+        if self.state == SAVE_DIALOG:
+            for e in events:
+                if e.type == pygame.KEYDOWN:
+                    if e.key == pygame.K_ESCAPE:
+                        self.state = IDLE
+                        self._save_overwrite_pending = False
+                    elif e.key == pygame.K_RETURN:
+                        self._confirm_save()
+                    elif e.key == pygame.K_BACKSPACE:
+                        self._save_name_input = self._save_name_input[:-1]
+                        self._save_overwrite_pending = False
+                    elif e.unicode and len(self._save_name_input) < 40:
+                        ch = e.unicode
+                        if ch.isalnum() or ch in "-_ ":
+                            self._save_name_input += ch
+                            self._save_overwrite_pending = False
 
     def _spawn_flow_shapes(self, results):
         """Spawn animated shape thumbnails showing actual objects on actual paths."""
@@ -1170,6 +1196,10 @@ class FactoryFloorUI:
             self._draw_training(surface)
         elif self.state == SHAPE_PREVIEW:
             self._draw_shape_preview(surface)
+        elif self.state == SAVE_DIALOG:
+            self._draw_save_dialog(surface)
+        elif self.state == LOAD_DIALOG:
+            self._draw_load_dialog(surface)
 
         # Status message (shown in all states except training which draws its own)
         if self.state != TRAINING and self._status_timer > 0:
@@ -1251,6 +1281,24 @@ class FactoryFloorUI:
         col = (180, 140, 60) if n_avail else (100, 100, 110)
         if self._draw_btn_raw(surface, btn_rect, c_label, col):
             self.state = CONTRACTS
+
+        # Load button (left of Contracts)
+        load_rect = pygame.Rect(btn_rect.x - 70, 10, 60, TOP_H - 20)
+        if self._draw_btn_raw(surface, load_rect, "Load", (110, 130, 160)):
+            from ..factory.save_load import list_saves
+            self._save_list_cache = list_saves()
+            self._load_selected = None
+            self.state = LOAD_DIALOG
+
+        # Save button (left of Load)
+        save_rect = pygame.Rect(load_rect.x - 70, 10, 60, TOP_H - 20)
+        if self._draw_btn_raw(surface, save_rect, "Save", (110, 160, 130)):
+            from ..factory.save_load import list_saves
+            self._save_list_cache = list_saves()
+            if not self._save_name_input:
+                self._save_name_input = "save1"
+            self._save_overwrite_pending = False
+            self.state = SAVE_DIALOG
 
         return result
 
@@ -1984,6 +2032,178 @@ class FactoryFloorUI:
         # Close button
         close_rect = pygame.Rect(W // 2 - 70, panel_y + len(ALL_CONTRACTS) * (row_h + 10) + 20, 140, 40)
         if self._draw_btn_raw(surface, close_rect, "Close", (150, 100, 100)):
+            self.state = IDLE
+
+    def _confirm_save(self):
+        from ..factory.save_load import (
+            sanitize_save_name, save_path_for, save_game, list_saves,
+        )
+        name = sanitize_save_name(self._save_name_input)
+        if not name:
+            self._show_status("Enter a save name")
+            return
+        path = save_path_for(name)
+        import os as _os
+        if _os.path.exists(path) and not self._save_overwrite_pending:
+            self._save_overwrite_pending = True
+            return
+        try:
+            save_game(self.world, path)
+            self._show_status(f"Saved: {name}")
+        except Exception as ex:
+            self._show_status(f"Save failed: {ex}")
+        self._save_overwrite_pending = False
+        self._save_list_cache = list_saves()
+        self.state = IDLE
+
+    def _swap_world(self, new_world):
+        self.world = new_world
+        self.gen = new_world.object_generator
+        self._node_rects.clear()
+        self._bin_positions.clear()
+        self._flow_shapes.clear()
+        self._floating_texts.clear()
+        self.selected_node = None
+        self._layout_dirty = True
+        self._viewport_initialized = False
+        self.paused = True
+
+    def _confirm_load(self, name: str):
+        from ..factory.save_load import save_path_for, load_game
+        try:
+            if self.world.workers:
+                device = str(self.world.workers[0].device)
+            else:
+                import torch
+                if torch.backends.mps.is_available():
+                    device = "mps"
+                elif torch.cuda.is_available():
+                    device = "cuda"
+                else:
+                    device = "cpu"
+        except Exception:
+            device = "cpu"
+        try:
+            new_world = load_game(save_path_for(name), device=device)
+        except Exception as ex:
+            self._show_status(f"Load failed: {ex}")
+            return
+        self._swap_world(new_world)
+        self._show_status(f"Loaded: {name}")
+        self.state = IDLE
+
+    def _draw_save_dialog(self, surface):
+        self._draw_overlay_bg(surface, opaque=True)
+        title_color = (220, 220, 230)
+        subtle = (160, 160, 170)
+
+        t = self.font_lg.render("Save Game", True, title_color)
+        surface.blit(t, (W // 2 - t.get_width() // 2, 40))
+
+        panel_w = 520
+        panel_x = W // 2 - panel_w // 2
+        panel_y = 100
+
+        hint = self.font_sm.render("Name your save:", True, subtle)
+        surface.blit(hint, (panel_x, panel_y))
+
+        input_rect = pygame.Rect(panel_x, panel_y + 22, panel_w, 36)
+        pygame.draw.rect(surface, (245, 243, 238), input_rect, border_radius=5)
+        pygame.draw.rect(surface, (0, 0, 0), input_rect, 2, border_radius=5)
+        it = self.font.render(self._save_name_input + "|", True, TEXT_DARK)
+        surface.blit(it, (input_rect.x + 8, input_rect.y + 8))
+
+        # Existing saves list (click to prefill)
+        list_y = panel_y + 80
+        lbl = self.font_sm.render("Existing saves (click to overwrite):", True, subtle)
+        surface.blit(lbl, (panel_x, list_y - 20))
+        row_h = 28
+        max_rows = 10
+        for i, info in enumerate(self._save_list_cache[:max_rows]):
+            ry = list_y + i * row_h
+            row_rect = pygame.Rect(panel_x, ry, panel_w, row_h - 4)
+            pygame.draw.rect(surface, (55, 58, 68), row_rect, border_radius=4)
+            pygame.draw.rect(surface, (90, 95, 110), row_rect, 1, border_radius=4)
+            nt = self.font_sm.render(info.name, True, title_color)
+            surface.blit(nt, (row_rect.x + 8, row_rect.y + 5))
+            import time as _t
+            ts = _t.strftime("%Y-%m-%d %H:%M", _t.localtime(info.mtime))
+            tt = self.font_sm.render(ts, True, subtle)
+            surface.blit(tt, (row_rect.right - tt.get_width() - 8, row_rect.y + 5))
+            if self._click_pos and row_rect.collidepoint(self._click_pos):
+                self._save_name_input = info.name
+                self._save_overwrite_pending = False
+
+        # Buttons
+        btn_y = list_y + min(len(self._save_list_cache), max_rows) * row_h + 20
+        if self._save_overwrite_pending:
+            warn = self.font_sm.render(
+                "File exists. Click Save again to overwrite.", True, (230, 180, 80))
+            surface.blit(warn, (panel_x, btn_y - 22))
+
+        save_btn = pygame.Rect(W // 2 - 150, btn_y, 130, 38)
+        cancel_btn = pygame.Rect(W // 2 + 20, btn_y, 130, 38)
+        save_col = (210, 170, 90) if self._save_overwrite_pending else (100, 160, 100)
+        save_label = "Overwrite" if self._save_overwrite_pending else "Save"
+        if self._draw_btn_raw(surface, save_btn, save_label, save_col):
+            self._confirm_save()
+        if self._draw_btn_raw(surface, cancel_btn, "Cancel", (150, 100, 100)):
+            self._save_overwrite_pending = False
+            self.state = IDLE
+
+    def _draw_load_dialog(self, surface):
+        self._draw_overlay_bg(surface, opaque=True)
+        title_color = (220, 220, 230)
+        subtle = (160, 160, 170)
+
+        t = self.font_lg.render("Load Game", True, title_color)
+        surface.blit(t, (W // 2 - t.get_width() // 2, 40))
+
+        panel_w = 560
+        panel_x = W // 2 - panel_w // 2
+        panel_y = 100
+
+        if not self._save_list_cache:
+            msg = self.font.render("No saves yet.", True, subtle)
+            surface.blit(msg, (W // 2 - msg.get_width() // 2, panel_y + 40))
+        else:
+            row_h = 34
+            max_rows = 14
+            for i, info in enumerate(self._save_list_cache[:max_rows]):
+                ry = panel_y + i * row_h
+                row_rect = pygame.Rect(panel_x, ry, panel_w, row_h - 4)
+                is_sel = (self._load_selected == info.name)
+                fill = (70, 90, 110) if is_sel else (55, 58, 68)
+                pygame.draw.rect(surface, fill, row_rect, border_radius=4)
+                border = (130, 170, 220) if is_sel else (90, 95, 110)
+                pygame.draw.rect(surface, border, row_rect, 2 if is_sel else 1, border_radius=4)
+                nt = self.font.render(info.name, True, title_color)
+                surface.blit(nt, (row_rect.x + 10, row_rect.y + 7))
+                import time as _t
+                ts = _t.strftime("%Y-%m-%d %H:%M", _t.localtime(info.mtime))
+                kb = info.size / 1024
+                meta = self.font_sm.render(f"{ts}   {kb:.0f} KB", True, subtle)
+                surface.blit(meta, (row_rect.right - meta.get_width() - 10, row_rect.y + 10))
+                if self._click_pos and row_rect.collidepoint(self._click_pos):
+                    self._load_selected = info.name
+
+        # Buttons
+        btn_y = panel_y + max(1, min(len(self._save_list_cache), 14)) * 34 + 20
+        load_btn = pygame.Rect(W // 2 - 230, btn_y, 130, 40)
+        del_btn = pygame.Rect(W // 2 - 70, btn_y, 130, 40)
+        cancel_btn = pygame.Rect(W // 2 + 100, btn_y, 130, 40)
+
+        enabled = self._load_selected is not None
+        load_col = (100, 160, 100) if enabled else (80, 90, 90)
+        del_col = (180, 100, 100) if enabled else (80, 90, 90)
+        if self._draw_btn_raw(surface, load_btn, "Load", load_col) and enabled:
+            self._confirm_load(self._load_selected)
+        if self._draw_btn_raw(surface, del_btn, "Delete", del_col) and enabled:
+            from ..factory.save_load import delete_save, list_saves
+            delete_save(self._load_selected)
+            self._save_list_cache = list_saves()
+            self._load_selected = None
+        if self._draw_btn_raw(surface, cancel_btn, "Cancel", (150, 100, 100)):
             self.state = IDLE
 
     def _draw_training(self, surface):
