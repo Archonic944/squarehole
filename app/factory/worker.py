@@ -19,7 +19,7 @@ BASE_INNER_STEPS = 5  # for ~10 examples; scales up with support set size
 # for and makes routing trees the only way to scale beyond a handful of
 # classes — a generalist trying to learn 19 classes can only give each
 # class ~1 example and will be catastrophically bad.
-MEMORY_CAP = 10
+MEMORY_CAP = 12
 
 _CHECKPOINT_DIR = os.path.join(
     os.path.dirname(__file__), "..", "models", "checkpoints"
