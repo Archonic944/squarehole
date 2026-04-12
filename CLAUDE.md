@@ -26,7 +26,7 @@ Python 3.11 via `.venv/` (learn2learn has build issues on 3.12+). Torch uses MPS
 ## Module Layout
 
 - `app/main.py` — entry point, pygame loop
-- `app/factory/` — game logic: `objects.py` (procedural shape generation), `worker.py` (MAML wrapper), `routing.py` (DAG graph), `world.py` (tick driver), `economy.py` (coins/rewards)
+- `app/factory/` — game logic: `objects.py` (procedural shape generation), `worker.py` (MAML wrapper), `routing.py` (DAG graph), `world.py` (tick driver), `economy.py` (coins/rewards), `contracts.py` (shape pack definitions)
 - `app/ui/` — `factory_floor.py` (main game screen, ~1500 lines), `graph_layout.py` (force-directed layout engine), `drawing_canvas.py` (player drawing tools)
 - `app/models/` — `conv4.py` (Conv4Backbone + Conv4WithHead), checkpoints in `checkpoints/`
 - `meta_training/` — `procedural_meta.py` (episode generator), `train_general.py` (MAML training loop), `synthetic_shapes.py` (shape primitives)
@@ -43,9 +43,13 @@ Python 3.11 via `.venv/` (learn2learn has build issues on 3.12+). Torch uses MPS
 
 Each `FactoryWorker` loads the shared backbone, gets a fresh classification head per task, and caches MAML-adapted weights. Inner steps scale with support set size (`BASE_INNER_STEPS=5`, up to 20). **Real inference runs on every object in the live game** — not simulated.
 
+**Memory cap (`MEMORY_CAP` in `worker.py`)** — every worker has a hard ceiling on total support-set examples (not per class). This forces the few-shot regime the backbone was meta-trained for and is the core economic lever: a generalist trying to learn many classes collapses to ~1 example per class and becomes unviable, making routing trees the only way to scale. `teach()` returns `False` when full; `force=True` bypasses the cap (used by save/load for back-compat). The UI shows `Memory: N / cap` and disables the "Add Example" button when full.
+
 ### Factory Simulation
 
 `FactoryWorld.tick()` generates objects → feeds into `RoutingGraph.process_tick()` (BFS order, real inference) → updates `Economy`. Throughput ramps from 1→8 objects/tick over time. Global speed level (purchasable upgrade) sets `processing_speed` on all nodes.
+
+**Progression is contract-based.** `contracts.py` defines 4 shape packs (Starter, Tricky Silhouettes, Holes & Cutouts, Multicolor). A new factory auto-accepts the Starter pack; others are accepted via the Contracts overlay (top-bar button). `world.accept_contract(id)` adds a pack's categories to `active_categories`. Contracts have an optional `cost` field (currently 0 everywhere) for future coin gating. The legacy `_remaining_categories` / `_maybe_unlock_category` auto-unlock path is kept alive only for `presets.py` back-compat; new factories start with it empty.
 
 Routing concepts are **user-defined** — the player teaches binary splits (e.g., "round" vs "angular") by drawing examples. No hardcoded category groupings. `category_mapping` on each worker maps ground-truth object categories to the worker's class names for simulated prediction mode (headless tests only).
 
