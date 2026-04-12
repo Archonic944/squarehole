@@ -2074,6 +2074,7 @@ class FactoryFloorUI:
                 self._training_new_class_input = ""
             label_y += 36
 
+        thumb_sz = 28
         # Support set preview with thumbnails + delete buttons
         if worker.class_names:
             label_y += 5
@@ -2089,7 +2090,6 @@ class FactoryFloorUI:
                 f"Memory: {used} / {cap}", True, mem_color)
             surface.blit(t, (label_x, label_y))
             label_y += 16
-            thumb_sz = 28
             for cls_name in worker.class_names:
                 examples = worker._support_set.get(cls_name, [])
                 t = self.font_sm.render(f"{cls_name} ({len(examples)}):", True, title_color)
@@ -2131,8 +2131,6 @@ class FactoryFloorUI:
             label_y += 15
             gx = label_x
             for gi, (g_surf, g_tensor) in enumerate(self._gallery):
-                if gi >= 12:  # cap display
-                    break
                 col = gi % 4
                 row = gi // 4
                 tx = label_x + col * (thumb_sz + 3)
@@ -2144,7 +2142,7 @@ class FactoryFloorUI:
                         and pygame.Rect(tx, ty, thumb_sz, thumb_sz).collidepoint(self._click_pos)
                         and not worker.is_memory_full):
                     self._train_submit_from_gallery(gi)
-            rows = min(3, (min(len(self._gallery), 12) + 3) // 4)
+            rows = (len(self._gallery) + 3) // 4
             label_y += rows * (thumb_sz + 3) + 5
 
         # Submit / Done buttons
