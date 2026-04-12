@@ -226,13 +226,11 @@ def test_at_scale(gen):
     ticks = 500
     t0 = time.time()
     w1 = build_generalist(gen, start_objects=5)
-    w1.THROUGHPUT_RAMP_INTERVAL = 999999  # disable ramp
     w1.run_ticks(ticks)
     s1 = print_report("Generalist @ 5/tick", w1, time.time() - t0, ticks)
 
     t0 = time.time()
     w2 = build_deep_routing(gen, start_objects=5)
-    w2.THROUGHPUT_RAMP_INTERVAL = 999999
     w2.run_ticks(ticks)
     s2 = print_report("Deep Routing @ 5/tick", w2, time.time() - t0, ticks)
 
@@ -278,7 +276,6 @@ def test_early_game(gen):
 
     t0 = time.time()
     w1 = build_generalist(gen, start_objects=1)
-    w1.THROUGHPUT_RAMP_INTERVAL = 999999  # no ramp
     w1.run_ticks(ticks)
     s1 = print_report("Generalist @ 1/tick", w1, time.time() - t0, ticks)
 

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from .objects import ObjectGenerator, SHAPE_FAMILIES
+from .contracts import ALL_CONTRACTS
 from .economy import Economy
 from .routing import RoutingGraph
-from .worker import FactoryWorker
+from .worker import FactoryWorker, MEMORY_CAP
 from .world import FactoryWorld, resolve_worker_checkpoint
-
-_EXAMPLES_PER_CLASS = 10
 
 
 def _checkpoint() -> str:
@@ -21,78 +20,85 @@ def _make_worker(
     category_mapping: dict[str, str],
     gen: ObjectGenerator,
     device: str,
+    training_cats: dict[str, list[str]] | None = None,
 ) -> FactoryWorker:
-    """Create a worker, teach it with generated examples, and estimate accuracy."""
+    """Create a worker, teach it with generated examples, and estimate accuracy.
+
+    *category_mapping* is the full map of every incoming category to the
+    output class label (used for routing stats and downstream correctness).
+
+    *training_cats* lets the caller specify a narrow set of representative
+    categories to teach each class from. This matters for concept hubs:
+    the MAML backbone is meta-trained on abstract visual features, so
+    prototypes built from a single clean exemplar per class generalise
+    far better than prototypes averaged across a whole family. When
+    omitted, training defaults to the category_mapping (terminal sorter
+    behaviour — each class is taught from its own category).
+    """
     w = FactoryWorker(
         name=name,
         checkpoint_path=_checkpoint(),
         num_classes=len(class_names),
         device=device,
     )
-    # Teach with generated examples
-    all_cats_for_worker = list(category_mapping.keys())
-    for cat in all_cats_for_worker:
-        label = category_mapping[cat]
-        for _ in range(_EXAMPLES_PER_CLASS):
+
+    if training_cats is None:
+        training_cats = {lab: [] for lab in class_names}
+        for cat, label in category_mapping.items():
+            training_cats.setdefault(label, []).append(cat)
+
+    per_class = max(1, MEMORY_CAP // max(1, len(class_names)))
+
+    for label in class_names:
+        cats_for_label = training_cats.get(label) or []
+        if not cats_for_label:
+            continue
+        for i in range(per_class):
+            cat = cats_for_label[i % len(cats_for_label)]
             obj = gen.generate(category=cat)
             w.teach(obj.tensor, label)
+
     w.category_mapping = dict(category_mapping)
-    # Estimate accuracy on fresh test objects
+
     test_objs = []
-    for cat in all_cats_for_worker:
-        for _ in range(5):
+    for cat in category_mapping.keys():
+        for _ in range(20):
             test_objs.append(gen.generate(category=cat))
     w.estimate_accuracy(test_objs)
     return w
 
 
 def simple_split(device: str = "cpu") -> FactoryWorld:
-    """A minimal 1-node routing DAG.
+    """A minimal 1-node routing DAG using three Starter shapes.
 
-    Root worker splits objects into "rounded" vs "angular".
-    Each output edge goes directly to a BIN.
-
-    Categories: circle, oval, triangle, diamond (the 4 starting categories
-    minus star_5/square, replaced with oval/diamond for a clean 2-way split).
+    Root worker classifies objects directly into circle/triangle/square
+    bins. Three classes × four examples fits the ``MEMORY_CAP=12`` budget
+    exactly and the distinct shapes give the backbone an easy task.
 
     DAG structure:
-        [root: round_vs_angular]
-           |-- "rounded"  --> BIN:rounded
-           |-- "angular"  --> BIN:angular
+        [root: Sorter]
+           |-- "circle"   --> BIN:circle
+           |-- "triangle" --> BIN:triangle
+           |-- "square"   --> BIN:square
     """
     gen = ObjectGenerator(difficulty=0.0)
     world = FactoryWorld(gen)
     world.objects_per_tick = 2
 
-    rounded_cats = ["circle", "oval"]
-    angular_cats = ["triangle", "diamond"]
-    all_cats = rounded_cats + angular_cats
-    world.active_categories = list(all_cats)
-    world._remaining_categories = [
-        c for c in gen.ALL_CATEGORIES if c not in all_cats
-    ]
+    cats = ["circle", "triangle", "square"]
+    world.active_categories = list(cats)
+    world._remaining_categories = []
 
-    # Build category mapping: each shape maps to "rounded" or "angular"
-    cat_map = {}
-    for c in rounded_cats:
-        cat_map[c] = "rounded"
-    for c in angular_cats:
-        cat_map[c] = "angular"
-
-    root_worker = _make_worker(
-        "Sorter", ["rounded", "angular"], cat_map, gen, device
-    )
+    cat_map = {c: c for c in cats}
+    root_worker = _make_worker("Sorter", list(cats), cat_map, gen, device)
     world.workers.append(root_worker)
 
-    # Build DAG
     world.graph.add_node("root", worker=root_worker)
     world.graph.set_root("root")
-    world.graph.connect("root", "rounded", "BIN:rounded")
-    world.graph.connect("root", "angular", "BIN:angular")
+    for c in cats:
+        world.graph.connect("root", c, f"BIN:{c}")
 
-    # Give enough coins to play with
     world.economy.coins = 500.0
-
     return world
 
 
@@ -184,139 +190,152 @@ def two_level_tree(device: str = "cpu") -> FactoryWorld:
 
 
 def stress_test(device: str = "cpu") -> FactoryWorld:
-    """A large DAG with 20+ nodes to stress-test the visual layout.
+    """A profitable DAG across all four contract packs (19 shapes).
 
-    Uses all 18 shape categories. Three-level deep routing tree:
-    - Level 0: Root splits by shape family (pointy/angular/rounded/boxy/organic)
-    - Level 1: Each family node splits into sub-groups of 2-3 categories
-    - Level 2: Sub-group nodes route to individual BIN: targets
+    Tree design notes:
 
-    DAG structure (simplified):
-        [root: family_router]
-           |-- "pointy"  --> [pointy_hub]
-           |                    |-- "stars"    --> [stars_node]
-           |                    |                    |-- "star_4" --> BIN:star_4
-           |                    |                    |-- "star_5" --> BIN:star_5
-           |                    |                    |-- "star_6" --> BIN:star_6
-           |                    |-- "non_stars" --> [pointy_other]
-           |                                         |-- "arrow"     --> BIN:arrow
-           |                                         |-- "lightning" --> BIN:lightning
-           |-- "angular" --> [angular_hub]
-           |                    |-- "tri"  --> [tri_node]
-           |                    |                |-- "triangle"       --> BIN:triangle
-           |                    |                |-- "right_triangle" --> BIN:right_triangle
-           |                    |-- "quad" --> [quad_node]
-           |                                     |-- "diamond"       --> BIN:diamond
-           |                                     |-- "parallelogram" --> BIN:parallelogram
-           |                                     |-- "trapezoid"     --> BIN:trapezoid
-           |-- "rounded" --> [rounded_hub]
-           |                    |-- "circle"    --> BIN:circle
-           |                    |-- "oval"      --> BIN:oval
-           |                    |-- "semicircle"--> BIN:semicircle
-           |-- "boxy"    --> [boxy_hub]
-           |                    |-- "square"    --> BIN:square
-           |                    |-- "rectangle" --> BIN:rectangle
-           |                    |-- "cross"     --> BIN:cross
-           |-- "organic" --> [organic_hub]
-                                |-- "heart"    --> BIN:heart
-                                |-- "crescent" --> BIN:crescent
+    - Every internal hub is a **binary concept split** anchored on a
+      contract shape the backbone's meta-training already saw.
+    - ``mono_hub`` uses ``cloud`` vs ``triangle``: this activates the
+      backbone's trained ``curved_edges vs straight_edges`` feature.
+      Under that feature ``teardrop`` reads as straight (sharp tip), so
+      it is routed through the straight branch.
+    - Depth is capped at 3 hops via a 3-way root so per-object accuracy
+      doesn't compound too steeply.
+    - ``objects_per_tick`` starts at 1: each node has ``processing_speed=1``
+      so the whole pipeline can absorb 1 obj/tick without the root queue
+      overflowing. The throughput ramp will push this up later; by then
+      the player is expected to buy speed upgrades.
+
+        root: holed / multicolor / mono
+                 (donut+gear / candy_cane+mushroom / triangle+circle)
+          holed      -> holed_sorter        (4 cats)
+          multicolor -> multicolor_sorter   (5 cats)
+          mono       -> mono_hub: curved / straight  (cloud / triangle)
+                          curved   -> 4-cat sorter (circle/heart/crescent/cloud)
+                          straight -> 6-cat sorter (triangle/square/star_5/
+                                                    arrow/lightning/teardrop)
     """
     gen = ObjectGenerator(difficulty=0.0)
     world = FactoryWorld(gen)
-    world.objects_per_tick = 5
-    world.active_categories = list(gen.ALL_CATEGORIES)
+    world.objects_per_tick = 1
+
+    starter = ["circle", "triangle", "square", "star_5", "heart"]
+    sils = ["arrow", "crescent", "cloud", "lightning", "teardrop"]
+    holes = ["donut", "picture_frame", "key", "gear"]
+    mc_cats = ["mushroom", "tree", "flower", "candy_cane", "rainbow"]
+
+    curved_cats = ["circle", "heart", "crescent", "cloud"]
+    straight_cats = [
+        "triangle", "square", "star_5", "arrow", "lightning", "teardrop",
+    ]
+
+    all_contract = starter + sils + holes + mc_cats
+
+    for contract in ALL_CONTRACTS:
+        world.accept_contract(contract.id)
+    world.active_categories = list(all_contract)
     world._remaining_categories = []
 
-    families = SHAPE_FAMILIES  # {"pointy": [...], "angular": [...], ...}
-
-    # --- Root worker: classify by family ---
-    family_names = list(families.keys())  # pointy, angular, rounded, boxy, organic
+    # --- Root: 3-way has_hole / multicolor / mono --------------------
     root_map: dict[str, str] = {}
-    for fam, cats in families.items():
-        for c in cats:
-            root_map[c] = fam
-    root_worker = _make_worker("Family Router", family_names, root_map, gen, device)
+    for c in holes:
+        root_map[c] = "holed"
+    for c in mc_cats:
+        root_map[c] = "multicolor"
+    for c in curved_cats + straight_cats:
+        root_map[c] = "mono"
+    root_worker = _make_worker(
+        "Root",
+        ["holed", "multicolor", "mono"],
+        root_map,
+        gen,
+        device,
+        training_cats={
+            # Two-anchor teach sets — diverse within-class exemplars pull
+            # the MAML prototype toward the shared feature rather than
+            # over-fitting to one category's specifics. Empirically (~70%
+            # 3-way accuracy) these beat single-anchor teaching.
+            "holed": ["donut", "gear"],
+            "multicolor": ["candy_cane", "mushroom"],
+            "mono": ["triangle", "circle"],
+        },
+    )
     world.workers.append(root_worker)
-
-    # Build the root node
     world.graph.add_node("root", worker=root_worker)
     world.graph.set_root("root")
 
-    # --- Per-family hubs and sub-nodes ---
+    # --- Holed branch: direct 4-class sorter --------------------------
+    holed_sorter = _make_worker(
+        "Holed Sorter",
+        list(holes),
+        {c: c for c in holes},
+        gen,
+        device,
+    )
+    world.workers.append(holed_sorter)
+    world.graph.add_node("holed_sorter", worker=holed_sorter)
+    world.graph.connect("root", "holed", "holed_sorter")
+    for c in holes:
+        world.graph.connect("holed_sorter", c, f"BIN:{c}")
 
-    # Define sub-groups for families that are large enough to split further
-    sub_groups: dict[str, dict[str, list[str]]] = {
-        "pointy": {
-            "stars": ["star_4", "star_5", "star_6"],
-            "non_stars": ["arrow", "lightning"],
-        },
-        "angular": {
-            "triangles": ["triangle", "right_triangle"],
-            "quads": ["diamond", "parallelogram", "trapezoid"],
-        },
-        # rounded, boxy, organic go directly to bins (small enough)
-    }
+    # --- Multicolor branch: direct 5-class sorter ---------------------
+    multicolor_sorter = _make_worker(
+        "Multicolor Sorter",
+        list(mc_cats),
+        {c: c for c in mc_cats},
+        gen,
+        device,
+    )
+    world.workers.append(multicolor_sorter)
+    world.graph.add_node("multicolor_sorter", worker=multicolor_sorter)
+    world.graph.connect("root", "multicolor", "multicolor_sorter")
+    for c in mc_cats:
+        world.graph.connect("multicolor_sorter", c, f"BIN:{c}")
 
-    for fam in family_names:
-        fam_node_id = f"{fam}_hub"
-        cats_in_family = families[fam]
+    # --- Mono branch: curved / straight (cloud / triangle anchors) ----
+    mono_map: dict[str, str] = {}
+    for c in curved_cats:
+        mono_map[c] = "curved"
+    for c in straight_cats:
+        mono_map[c] = "straight"
+    mono_hub = _make_worker(
+        "Mono Hub",
+        ["curved", "straight"],
+        mono_map,
+        gen,
+        device,
+        training_cats={"curved": ["cloud"], "straight": ["triangle"]},
+    )
+    world.workers.append(mono_hub)
+    world.graph.add_node("mono_hub", worker=mono_hub)
+    world.graph.connect("root", "mono", "mono_hub")
 
-        if fam in sub_groups:
-            # This family has sub-groups: hub -> sub-group nodes -> bins
-            groups = sub_groups[fam]
-            group_names = list(groups.keys())
+    curved_sorter = _make_worker(
+        "Curved Sorter",
+        list(curved_cats),
+        {c: c for c in curved_cats},
+        gen,
+        device,
+    )
+    world.workers.append(curved_sorter)
+    world.graph.add_node("curved_sorter", worker=curved_sorter)
+    world.graph.connect("mono_hub", "curved", "curved_sorter")
+    for c in curved_cats:
+        world.graph.connect("curved_sorter", c, f"BIN:{c}")
 
-            # Hub worker: classify into sub-groups
-            hub_map: dict[str, str] = {}
-            for grp_name, grp_cats in groups.items():
-                for c in grp_cats:
-                    hub_map[c] = grp_name
-            hub_worker = _make_worker(
-                f"{fam.title()} Hub", group_names, hub_map, gen, device
-            )
-            world.workers.append(hub_worker)
-            world.graph.add_node(fam_node_id, worker=hub_worker)
-            world.graph.connect("root", fam, fam_node_id)
-
-            # Sub-group nodes -> individual bins
-            for grp_name, grp_cats in groups.items():
-                grp_node_id = f"{fam}_{grp_name}"
-
-                if len(grp_cats) == 1:
-                    # Only one category: hub routes directly to bin
-                    world.graph.connect(fam_node_id, grp_name, f"BIN:{grp_cats[0]}")
-                else:
-                    # Sub-group worker identifies individual categories
-                    grp_map = {c: c for c in grp_cats}
-                    grp_worker = _make_worker(
-                        f"{grp_name.title().replace('_', ' ')} Sorter",
-                        list(grp_cats), grp_map, gen, device,
-                    )
-                    world.workers.append(grp_worker)
-                    world.graph.add_node(grp_node_id, worker=grp_worker)
-                    world.graph.connect(fam_node_id, grp_name, grp_node_id)
-
-                    # Each category -> bin
-                    for c in grp_cats:
-                        world.graph.connect(grp_node_id, c, f"BIN:{c}")
-        else:
-            # Small family: hub routes directly to bins
-            if len(cats_in_family) == 1:
-                # Single-category family: root routes directly to bin
-                world.graph.connect("root", fam, f"BIN:{cats_in_family[0]}")
-            else:
-                hub_map = {c: c for c in cats_in_family}
-                hub_worker = _make_worker(
-                    f"{fam.title()} Sorter", list(cats_in_family),
-                    hub_map, gen, device,
-                )
-                world.workers.append(hub_worker)
-                world.graph.add_node(fam_node_id, worker=hub_worker)
-                world.graph.connect("root", fam, fam_node_id)
-
-                for c in cats_in_family:
-                    world.graph.connect(fam_node_id, c, f"BIN:{c}")
+    straight_sorter = _make_worker(
+        "Straight Sorter",
+        list(straight_cats),
+        {c: c for c in straight_cats},
+        gen,
+        device,
+    )
+    world.workers.append(straight_sorter)
+    world.graph.add_node("straight_sorter", worker=straight_sorter)
+    world.graph.connect("mono_hub", "straight", "straight_sorter")
+    for c in straight_cats:
+        world.graph.connect("straight_sorter", c, f"BIN:{c}")
 
     world.economy.coins = 5000.0
-
     return world

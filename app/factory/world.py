@@ -109,13 +109,8 @@ class FactoryWorld:
 
         # 5. Difficulty scaling
         self._maybe_unlock_category()
-        self._maybe_ramp_throughput()
 
         return results
-
-    # Throughput ramp: objects_per_tick increases over time
-    THROUGHPUT_RAMP_INTERVAL: int = 100  # every N ticks
-    MAX_OBJECTS_PER_TICK: int = 8
 
     def _maybe_unlock_category(self):
         """Unlock a new object category every CATEGORY_UNLOCK_INTERVAL ticks."""
@@ -125,15 +120,6 @@ class FactoryWorld:
         ):
             new_cat = self._remaining_categories.pop(0)
             self.active_categories.append(new_cat)
-
-    def _maybe_ramp_throughput(self):
-        """Increase objects_per_tick over time so routing becomes necessary."""
-        if (
-            self.tick_count > 0
-            and self.tick_count % self.THROUGHPUT_RAMP_INTERVAL == 0
-            and self.objects_per_tick < self.MAX_OBJECTS_PER_TICK
-        ):
-            self.objects_per_tick += 1
 
     # ------------------------------------------------------------------
     # Worker management

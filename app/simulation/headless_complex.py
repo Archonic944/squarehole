@@ -82,7 +82,6 @@ def make_world(gen, start_objects=8, speed_level=8) -> FactoryWorld:
     world.objects_per_tick = start_objects
     world.speed_level = speed_level
     world._remaining_categories = []
-    world.THROUGHPUT_RAMP_INTERVAL = 999_999  # disable; we set obj/tick manually
     return world
 
 
@@ -255,15 +254,28 @@ def print_report(name, world: FactoryWorld, elapsed: float, ticks: int,
     return stats
 
 
-def run_with_per_pack_tracking(world: FactoryWorld, ticks: int):
+def run_with_per_pack_tracking(
+    world: FactoryWorld,
+    ticks: int,
+    ramp_every: int | None = None,
+    ramp_max: int = 8,
+):
     """Run ticks while tracking which categories end up in which bins.
 
-    Returns (per_pack_correct, per_pack_total) — counts of objects that
-    reached the correct bin (correct) vs total processed.
+    If *ramp_every* is given, ``objects_per_tick`` is incremented by 1
+    every *ramp_every* ticks (capped at *ramp_max*), simulating the
+    original throughput ramp. Returns (per_pack_correct, per_pack_total).
     """
     correct: dict[str, int] = {c: 0 for c in ALL_19}
     total:   dict[str, int] = {c: 0 for c in ALL_19}
-    for _ in range(ticks):
+    for t in range(ticks):
+        if (
+            ramp_every
+            and t > 0
+            and t % ramp_every == 0
+            and world.objects_per_tick < ramp_max
+        ):
+            world.objects_per_tick += 1
         results = world.tick()
         for obj, bin_name in results.correct:
             correct[obj.category] += 1
@@ -316,17 +328,18 @@ def main():
     # ----- Test 2: throughput ramp (realistic gameplay) -----
     print()
     print("=" * 78)
-    print("  Test 2 — throughput ramp 1 → 8 obj/tick (simulating gameplay)")
+    print("  Test 2 — manual throughput ramp 1 → 8 obj/tick")
     print("=" * 78)
     random.seed(42)
     torch.manual_seed(42)
     world2, _ = build_cascade(gen)
     world2.objects_per_tick = 1
-    world2.THROUGHPUT_RAMP_INTERVAL = 100
     ramp_ticks = 800
-    print(f"Running {ramp_ticks} ticks, ramp +1 every 100 ticks...")
+    print(f"Running {ramp_ticks} ticks, +1 obj/tick every 100 ticks (max 8)...")
     t0 = time.time()
-    correct2, total2 = run_with_per_pack_tracking(world2, ramp_ticks)
+    correct2, total2 = run_with_per_pack_tracking(
+        world2, ramp_ticks, ramp_every=100, ramp_max=8
+    )
     elapsed = time.time() - t0
     print_report("Deep Routing v3 — with ramp", world2, elapsed, ramp_ticks,
                  per_pack_correct=correct2, per_pack_total=total2)
