@@ -689,41 +689,53 @@ class FactoryFloorUI:
         wrong_set = set(id(o) for o, _, _ in results.wrong)
         speed_mult = self.world.speed_level
 
-        # Show each actual flow: the real object on the real edge it traveled
-        stagger = 0.0
+        # Group flows by object so multi-hop paths animate sequentially
+        from collections import OrderedDict
+        obj_hops: OrderedDict[int, list] = OrderedDict()
         for obj, from_nid, target_str, prediction in results.flows:
-            src_rect = self._node_rects.get(from_nid)
-            if not src_rect:
-                continue
+            oid = id(obj)
+            if oid not in obj_hops:
+                obj_hops[oid] = []
+            obj_hops[oid].append((obj, from_nid, target_str, prediction))
 
+        stagger = 0.0
+        for oid, hops in obj_hops.items():
+            obj = hops[0][0]
             thumb = _tensor_to_thumb(obj.tensor)
 
             # Determine border color based on final outcome
-            obj_id = id(obj)
-            if obj_id in correct_set:
+            if oid in correct_set:
                 border = BORDER_CORRECT
-            elif obj_id in wrong_set:
+            elif oid in wrong_set:
                 border = BORDER_WRONG
             else:
                 border = BORDER_TRANSIT
 
-            # Find destination position
-            if target_str.startswith("BIN:"):
-                key = f"{from_nid}:{target_str}"
-                if key in self._bin_positions:
-                    bx, by = self._bin_positions[key]
-                    dest = (bx + 15, by + 8)
+            # Chain hops: each segment starts after the previous one ends
+            cumulative_delay = stagger
+            for obj, from_nid, target_str, prediction in hops:
+                src_rect = self._node_rects.get(from_nid)
+                if not src_rect:
+                    continue
+
+                if target_str.startswith("BIN:"):
+                    key = f"{from_nid}:{target_str}"
+                    if key in self._bin_positions:
+                        bx, by = self._bin_positions[key]
+                        dest = (bx + 15, by + 8)
+                    else:
+                        continue
+                elif target_str in self._node_rects:
+                    dest = self._node_rects[target_str].midleft
                 else:
                     continue
-            elif target_str in self._node_rects:
-                dest = self._node_rects[target_str].midleft
-            else:
-                continue
 
-            fs = FlowShape(src_rect.midright, dest, thumb, border, speed_mult)
-            fs.t = -stagger  # stagger so shapes don't overlap
+                fs = FlowShape(src_rect.midright, dest, thumb, border, speed_mult)
+                fs.t = -cumulative_delay
+                cumulative_delay += fs.duration
+                self._flow_shapes.append(fs)
+
             stagger += 0.08 / speed_mult
-            self._flow_shapes.append(fs)
 
         # Objects entering the system from the left edge
         all_entering = ([o for o, _ in results.correct] +
