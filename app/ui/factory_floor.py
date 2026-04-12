@@ -999,6 +999,44 @@ class FactoryFloorUI:
         self._pending_action = None
         self._show_status(f"Added specialist '{name}' — train it to define classes!")
 
+    def _action_clone_node(self):
+        """Create a new node with a copy of the selected node's worker."""
+        if not self.selected_node:
+            return
+        node = self.world.graph.nodes.get(self.selected_node)
+        if not node or not node.worker:
+            self._show_status("No worker to clone")
+            return
+        CLONE_COST = 100
+        if not self.world.economy.can_afford(CLONE_COST):
+            self._show_status(f"Not enough coins! Need ${CLONE_COST}")
+            return
+        self.world.economy.spend(CLONE_COST)
+
+        from app.factory.worker import FactoryWorker
+        from app.factory.world import resolve_worker_checkpoint
+        src = node.worker
+        new_worker = FactoryWorker(
+            name=f"{src.name}'",
+            checkpoint_path=resolve_worker_checkpoint(),
+            num_classes=max(src.num_classes, 2),
+            device=str(src.device),
+        )
+        for cls_name in src.class_names:
+            for t in src._support_set.get(cls_name, []):
+                new_worker.teach(t.clone(), cls_name, force=True)
+        new_worker.category_mapping = dict(src.category_mapping)
+        self.world.workers.append(new_worker)
+
+        node_id = f"node_{len(self.world.graph.nodes)}"
+        while node_id in self.world.graph.nodes:
+            node_id = f"node_{len(self.world.graph.nodes)}_{random.randint(1000, 9999)}"
+        self.world.graph.add_node(node_id, queue_capacity=10)
+        self.world.assign_worker(new_worker, node_id)
+        self.selected_node = node_id
+        self._layout_dirty = True
+        self._show_status(f"Cloned '{src.name}' for ${CLONE_COST}")
+
     def _action_connect(self):
         """Connect a worker output to another node. Step 1: pick which output."""
         if not self.selected_node:
@@ -1669,6 +1707,14 @@ class FactoryFloorUI:
             t = self.font_sm.render(f"Speed: {node.processing_speed} | Queue: {len(node.queue)}", True, (80, 80, 80))
             surface.blit(t, (BTN_X, y))
             y += 20
+
+            clone_cost = 100
+            can_afford = self.world.economy.can_afford(clone_cost)
+            clone_rect = pygame.Rect(BTN_X, y, BTN_W, BTN_H)
+            clone_col = (140, 170, 210) if can_afford else (150, 150, 150)
+            if self._draw_btn_raw(surface, clone_rect, f"Clone Node  (${clone_cost})", clone_col):
+                self._action_clone_node()
+            y += BTN_H + 6
         else:
             t = self.font_sm.render("No worker assigned", True, (150, 100, 100))
             surface.blit(t, (BTN_X, y))
