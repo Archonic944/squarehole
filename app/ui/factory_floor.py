@@ -431,10 +431,12 @@ class FactoryFloorUI:
         # Compute virtual canvas bounds
         self._compute_canvas_bounds()
 
-        # Center viewport on root on first layout
+        # Center viewport on root on first layout; clamp on subsequent
         if not self._viewport_initialized:
             self._center_viewport_on_root()
             self._viewport_initialized = True
+        else:
+            self._clamp_viewport()
 
         self._layout_dirty = False
 
