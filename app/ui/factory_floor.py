@@ -523,7 +523,7 @@ class FactoryFloorUI:
         mm_w = self._canvas_w * scale
         mm_h = self._canvas_h * scale
         mm_x = GRAPH_X + GRAPH_W - mm_w - MINIMAP_PAD
-        mm_y = GRAPH_Y + MINIMAP_PAD
+        mm_y = GRAPH_Y + GRAPH_H - mm_h - MINIMAP_PAD
         return (scale, mm_x, mm_y, mm_w, mm_h)
 
     def _virtual_to_minimap(self, vx: float, vy: float,
