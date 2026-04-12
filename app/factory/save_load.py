@@ -11,7 +11,7 @@ from .objects import ObjectGenerator
 from .economy import Economy
 from .routing import RoutingGraph, RoutingNode, RoutingEdge
 from .worker import FactoryWorker
-from .world import FactoryWorld, GENERAL_CHECKPOINT, WHATS_CHECKPOINT
+from .world import FactoryWorld, resolve_worker_checkpoint
 
 
 def save_game(world: FactoryWorld, path: str) -> None:
@@ -109,7 +109,7 @@ def load_game(path: str, device: str = "cpu") -> FactoryWorld:
     world.economy.total_penalties = ed["total_penalties"]
 
     # Reconstruct workers
-    checkpoint = GENERAL_CHECKPOINT if os.path.exists(GENERAL_CHECKPOINT) else WHATS_CHECKPOINT
+    checkpoint = resolve_worker_checkpoint()
     workers: list[FactoryWorker] = []
     for wd_worker in data["workers"]:
         num_classes = max(wd_worker["num_classes"], 2)

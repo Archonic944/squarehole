@@ -39,7 +39,7 @@ Python 3.11 via `.venv/` (learn2learn has build issues on 3.12+). Torch uses MPS
 
 `FactoryObject` holds a `(3, 84, 84)` normalized float tensor plus `category` string and `attributes` dict — this is the universal data format flowing through the factory.
 
-`Conv4WithHead` (configurable hidden=64/128/256) wrapped in learn2learn's `MAML`. Meta-trained on procedural episodes via `meta_training/procedural_meta.py` — 80% instance discrimination (tell apart two random shape types), 20% concept-based (abstract visual properties). The backbone learns general few-shot visual features. Checkpoint: `app/models/checkpoints/general_conv4_128.pt`.
+`Conv4WithHead` (configurable hidden=64/128/256) wrapped in learn2learn's `MAML`. Meta-trained on procedural episodes via `meta_training/procedural_meta.py` — 80% instance discrimination (tell apart two random shape types), 20% concept-based (abstract visual properties). The backbone learns general few-shot visual features. Runtime prefers `app/models/checkpoints/general_conv4_192_robust.pt` (fallbacks include 192/128 legacy checkpoints).
 
 Each `FactoryWorker` loads the shared backbone, gets a fresh classification head per task, and caches MAML-adapted weights. Inner steps scale with support set size (`BASE_INNER_STEPS=5`, up to 20). **Real inference runs on every object in the live game** — not simulated.
 

@@ -15,9 +15,24 @@ if TYPE_CHECKING:
 _CHECKPOINT_DIR = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "models", "checkpoints")
 )
-GENERAL_CHECKPOINT = os.path.join(_CHECKPOINT_DIR, "general_conv4_128.pt")
-# Fallback to old checkpoint if general hasn't been trained yet
+GENERAL_CHECKPOINT = os.path.join(_CHECKPOINT_DIR, "general_conv4_192_robust.pt")
+GENERAL_CHECKPOINT_192 = os.path.join(_CHECKPOINT_DIR, "general_conv4_192.pt")
+GENERAL_CHECKPOINT_128 = os.path.join(_CHECKPOINT_DIR, "general_conv4_128.pt")
+# Fallback to legacy task-specific checkpoint if no general checkpoint exists
 WHATS_CHECKPOINT = os.path.join(_CHECKPOINT_DIR, "whats_this_maml.pt")
+
+
+def resolve_worker_checkpoint() -> str:
+    """Return the best available checkpoint path for runtime workers."""
+    for path in (
+        GENERAL_CHECKPOINT,
+        GENERAL_CHECKPOINT_192,
+        GENERAL_CHECKPOINT_128,
+        WHATS_CHECKPOINT,
+    ):
+        if os.path.exists(path):
+            return path
+    return WHATS_CHECKPOINT
 
 
 class FactoryWorld:
@@ -149,7 +164,7 @@ class FactoryWorld:
 
         self.economy.spend(self.economy.HIRE_COST)
 
-        checkpoint = GENERAL_CHECKPOINT if os.path.exists(GENERAL_CHECKPOINT) else WHATS_CHECKPOINT
+        checkpoint = resolve_worker_checkpoint()
         if binary:
             num_classes = 2
         else:

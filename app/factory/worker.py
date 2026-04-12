@@ -66,7 +66,7 @@ class FactoryWorker:
         self._support_set: dict[str, list[torch.Tensor]] = defaultdict(list)
 
         # Build model and wrap in MAML
-        self.hidden = 128  # match the general checkpoint
+        self.hidden = 192  # match the runtime general checkpoint
         self._base_model = Conv4WithHead(num_classes=num_classes, hidden=self.hidden).to(self.device)
         self._maml = l2l.algorithms.MAML(
             self._base_model, lr=INNER_LR, first_order=True

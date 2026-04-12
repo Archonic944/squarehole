@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-import os
-
 from .objects import ObjectGenerator, SHAPE_FAMILIES
 from .economy import Economy
 from .routing import RoutingGraph
 from .worker import FactoryWorker
-from .world import FactoryWorld, GENERAL_CHECKPOINT, WHATS_CHECKPOINT
+from .world import FactoryWorld, resolve_worker_checkpoint
 
 _EXAMPLES_PER_CLASS = 10
 
 
 def _checkpoint() -> str:
-    return GENERAL_CHECKPOINT if os.path.exists(GENERAL_CHECKPOINT) else WHATS_CHECKPOINT
+    return resolve_worker_checkpoint()
 
 
 def _make_worker(
