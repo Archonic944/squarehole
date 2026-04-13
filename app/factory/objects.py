@@ -390,40 +390,60 @@ def _draw_heart(draw: ImageDraw.ImageDraw, cx: float, cy: float,
 
 def _draw_crescent(draw: ImageDraw.ImageDraw, cx: float, cy: float,
                    size: float, attrs: dict):
-    """Two overlapping ellipses with background fill to cut out the bite."""
-    # Build a crescent as a polygon by sampling the outer circle minus inner
-    n = 80
-    outer_r = size
-    inner_r = size * random.uniform(0.65, 0.85)
-    inner_offset_x = size * random.uniform(0.25, 0.5)
-    inner_offset_y = size * random.uniform(-0.15, 0.15)
+    """Moon-shape crescent from two overlapping circles.
 
-    # Outer arc  (full circle)
-    outer_pts = []
-    for i in range(n):
-        a = 2.0 * math.pi * i / n
-        outer_pts.append((cx + outer_r * math.cos(a),
-                          cy + outer_r * math.sin(a)))
+    Builds a proper polygon by walking the outer arc on the far side of the
+    inner circle, then the inner arc on the near side back to the start.
+    """
+    R = size
+    r = size * random.uniform(0.85, 1.0)
+    dx = size * random.uniform(0.45, 0.70)
+    dy = size * random.uniform(-0.12, 0.12)
+    d = math.hypot(dx, dy)
 
-    # Inner arc (full circle, shifted) -- we'll subtract
-    inner_cx = cx + inner_offset_x
-    inner_cy = cy + inner_offset_y
-    inner_pts = []
-    for i in range(n):
-        a = 2.0 * math.pi * i / n
-        inner_pts.append((inner_cx + inner_r * math.cos(a),
-                          inner_cy + inner_r * math.sin(a)))
+    # Circles must properly overlap (two intersections) — fall back otherwise.
+    if d >= R + r or d <= abs(R - r) or d < 1e-3:
+        pts = [
+            (cx + R * math.cos(2 * math.pi * i / 80),
+             cy + R * math.sin(2 * math.pi * i / 80))
+            for i in range(80)
+        ]
+        pts = _transform(pts, attrs, cx, cy)
+        _draw_poly(draw, pts, attrs)
+        return
 
-    # Keep only outer points that are NOT inside the inner circle
-    crescent: list[tuple[float, float]] = []
-    for px, py in outer_pts:
-        dist = math.hypot(px - inner_cx, py - inner_cy)
-        if dist >= inner_r * 0.95:
-            crescent.append((px, py))
+    icx = cx + dx
+    icy = cy + dy
+    angle_to_inner = math.atan2(dy, dx)
 
-    if len(crescent) < 4:
-        crescent = outer_pts  # fallback
+    # Angles (at outer center) to the two intersection points.
+    cos_phi = (R * R + d * d - r * r) / (2 * R * d)
+    cos_phi = max(-1.0, min(1.0, cos_phi))
+    phi = math.acos(cos_phi)
 
+    # Outer arc goes the long way AROUND, away from the inner circle.
+    steps = 60
+    outer_arc: list[tuple[float, float]] = []
+    a_start = angle_to_inner + phi
+    a_end = angle_to_inner - phi + 2 * math.pi
+    for i in range(steps + 1):
+        a = a_start + (a_end - a_start) * i / steps
+        outer_arc.append((cx + R * math.cos(a), cy + R * math.sin(a)))
+
+    # Inner arc: from inner-circle center, the arc facing the outer center.
+    cos_psi = (r * r + d * d - R * R) / (2 * r * d)
+    cos_psi = max(-1.0, min(1.0, cos_psi))
+    psi = math.acos(cos_psi)
+    angle_to_outer = angle_to_inner + math.pi
+
+    inner_arc: list[tuple[float, float]] = []
+    i_start = angle_to_outer + psi
+    i_end = angle_to_outer - psi
+    for i in range(steps + 1):
+        a = i_start + (i_end - i_start) * i / steps
+        inner_arc.append((icx + r * math.cos(a), icy + r * math.sin(a)))
+
+    crescent = outer_arc + inner_arc
     crescent = _transform(crescent, attrs, cx, cy)
     _draw_poly(draw, crescent, attrs)
 
