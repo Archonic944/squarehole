@@ -328,6 +328,7 @@ CONTRACTS = 5
 SHAPE_PREVIEW = 6
 SAVE_DIALOG = 7
 LOAD_DIALOG = 8
+DRAW_CUSTOM_SHAPE = 9
 
 
 class FactoryFloorUI:
@@ -697,13 +698,16 @@ class FactoryFloorUI:
             elif not self._dry_run_active:
                 canvas_rect = pygame.Rect(270, 70, CANVAS_SIZE, CANVAS_SIZE)
                 self._canvas.handle_events(events, canvas_rect)
+        elif self.state == 9: # DRAW_CUSTOM_SHAPE
+            canvas_rect = pygame.Rect(270, 70, 336, 336)
+            self._canvas.handle_events(events, canvas_rect)
         elif self.state == IDLE:
             self._handle_idle_click()
         elif self.state == CONNECTING:
             self._handle_connecting_click()
 
         # Suppress click for background UI when overlay is active
-        if self.state in (TRAINING, DIALOG_TEXT, DIALOG_SELECT, CONTRACTS, SHAPE_PREVIEW, SAVE_DIALOG, LOAD_DIALOG):
+        if self.state in (TRAINING, DIALOG_TEXT, DIALOG_SELECT, CONTRACTS, SHAPE_PREVIEW, SAVE_DIALOG, LOAD_DIALOG, 9):
             self._bg_click_suppressed = True
         else:
             self._bg_click_suppressed = False
@@ -1395,6 +1399,8 @@ class FactoryFloorUI:
             self._draw_save_dialog(surface)
         elif self.state == LOAD_DIALOG:
             self._draw_load_dialog(surface)
+        elif self.state == 9: # DRAW_CUSTOM_SHAPE
+            self._draw_custom_shape(surface)
 
         # Status message (shown in all states except training which draws its own)
         if self.state != TRAINING and self._status_timer > 0:
@@ -2041,7 +2047,31 @@ class FactoryFloorUI:
             hover = rect.collidepoint(pygame.mouse.get_pos())
             border_col = (230, 220, 140) if hover else (120, 120, 130)
             pygame.draw.rect(surface, border_col, rect, 1)
+            
+            # Draw the checkbox at the top-right corner
+            chk_w = 12
+            chk_h = 12
+            chk_rect = pygame.Rect(tx + THUMB - chk_w, thumb_y, chk_w, chk_h)
+            chk_hover = chk_rect.collidepoint(pygame.mouse.get_pos())
+            is_enabled = cat not in self.world.disabled_categories
+            chk_color = (100, 200, 100) if is_enabled else (200, 100, 100)
+            if chk_hover: chk_color = tuple(min(255, c + 30) for c in chk_color)
+            pygame.draw.rect(surface, chk_color, chk_rect)
+            pygame.draw.rect(surface, (50, 50, 50), chk_rect, 1)
+            if is_enabled:
+                pygame.draw.line(surface, (0, 0, 0), (chk_rect.x+2, chk_rect.y+chk_h//2), (chk_rect.x+chk_w//2, chk_rect.y+chk_h-2), 2)
+                pygame.draw.line(surface, (0, 0, 0), (chk_rect.x+chk_w//2, chk_rect.y+chk_h-2), (chk_rect.x+chk_w-2, chk_rect.y+2), 2)
+
+            if self._click_pos is not None and chk_rect.collidepoint(self._click_pos):
+                if is_enabled:
+                    self.world.disabled_categories.add(cat)
+                else:
+                    self.world.disabled_categories.discard(cat)
+                # clear click so we don't also open the preview
+                self._click_pos = None
+
             if self._click_pos is not None and rect.collidepoint(self._click_pos):
+
                 self._preview_category = cat
                 self.state = SHAPE_PREVIEW
                 self._preview_just_opened = True
@@ -2092,6 +2122,25 @@ class FactoryFloorUI:
                 f"{self._shapes_page + 1}/{max_page + 1}",
                 True, (160, 160, 170))
             surface.blit(ind, (W // 2 - ind.get_width() // 2, by + 2))
+
+        # Draw + button
+        plus_w = 36
+        plus_x = strip_right + GAP
+        plus_y = by + (BOTTOM_H - THUMB) // 2
+        plus_rect = pygame.Rect(plus_x, plus_y, plus_w, THUMB)
+        plus_hover = plus_rect.collidepoint(pygame.mouse.get_pos())
+        p_col = (95, 105, 125) if plus_hover else (70, 80, 100)
+        pygame.draw.rect(surface, p_col, plus_rect, border_radius=4)
+        pygame.draw.rect(surface, (30, 35, 45), plus_rect, 1, border_radius=4)
+        
+        cx, cy = plus_rect.center
+        pygame.draw.line(surface, (220, 220, 220), (cx - 8, cy), (cx + 8, cy), 3)
+        pygame.draw.line(surface, (220, 220, 220), (cx, cy - 8), (cx, cy + 8), 3)
+        
+        if self._click_pos is not None and plus_rect.collidepoint(self._click_pos):
+            self.state = 9 # DRAW_CUSTOM_SHAPE
+            self._canvas.clear()
+            self._click_pos = None
 
         return None
 
@@ -2832,3 +2881,68 @@ class FactoryFloorUI:
 
     def draw_button(self, rect, text, color=(100, 150, 220)):
         return self._draw_btn_raw(pygame.display.get_surface(), rect, text, color)
+
+
+    def _draw_custom_shape(self, surface):
+        self._draw_overlay_bg(surface, opaque=True)
+        
+        title_color = (220, 220, 230)
+        subtle = (160, 160, 170)
+
+        # Title
+        t = self.font_lg.render("Draw Custom Object", True, title_color)
+        surface.blit(t, (W // 2 - t.get_width() // 2, 20))
+        
+        # Canvas
+        canvas_rect = pygame.Rect(270, 70, CANVAS_SIZE, CANVAS_SIZE)
+        surface.blit(self._canvas.canvas, canvas_rect.topleft)
+        pygame.draw.rect(surface, (120, 120, 120), canvas_rect, 2)
+        self._canvas.draw_cursor_preview(surface, canvas_rect)
+
+        # Toolbar
+        self._canvas.draw_toolbar(surface, self, 20, 178)
+
+        # Right Panel controls
+        panel_x = canvas_rect.right + 25
+        panel_y = 80
+        
+        # Add to Gallery Button
+        if self.draw_button(pygame.Rect(panel_x, panel_y, 200, 40), "Add to Gallery", (100, 150, 100)):
+            import torch
+            import numpy as np
+            import time
+            from app.factory.objects import _CUSTOM_SHAPES
+            
+            # create object from canvas
+            preview = self._canvas.get_surface_84()
+            arr = pygame.surfarray.pixels3d(preview)
+            # surfarray is (W, H, 3), we need (3, H, W)
+            arr = np.transpose(arr, (2, 1, 0))
+            tensor = torch.from_numpy(arr.astype(np.float32)) / 255.0
+            
+            # generate custom category id
+            cat_id = f"custom_{int(time.time()*1000)}"
+            
+            # Register in ObjectGenerator so it acts as a first class shape
+            _CUSTOM_SHAPES[cat_id] = tensor
+            
+            if cat_id not in self.gen.ALL_CATEGORIES:
+                self.gen.ALL_CATEGORIES.append(cat_id)
+            if "custom" not in self.gen.SHAPE_FAMILIES:
+                self.gen.SHAPE_FAMILIES["custom"] = []
+            self.gen.SHAPE_FAMILIES["custom"].append(cat_id)
+            
+            # Activate it
+            if cat_id not in self.world.active_categories:
+                self.world.active_categories.append(cat_id)
+                
+            # close the dialog and clear
+            self.state = IDLE
+            self._canvas.clear()
+            self._click_pos = None
+
+        # Cancel button
+        if self.draw_button(pygame.Rect(panel_x, panel_y + 60, 200, 40), "Cancel", (150, 100, 100)):
+            self.state = IDLE
+            self._canvas.clear()
+            self._click_pos = None

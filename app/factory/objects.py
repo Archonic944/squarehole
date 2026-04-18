@@ -986,11 +986,13 @@ def _image_to_tensor(img: Image.Image) -> torch.Tensor:
 # Public API
 # ---------------------------------------------------------------------------
 
+_CUSTOM_SHAPES = {}  # category -> torch.Tensor
+
 class ObjectGenerator:
     """Procedural generator for factory objects with high per-instance variety."""
 
-    ALL_CATEGORIES: list[str] = ALL_CATEGORIES
-    SHAPE_FAMILIES: dict[str, list[str]] = SHAPE_FAMILIES
+    ALL_CATEGORIES: list[str] = ALL_CATEGORIES.copy()
+    SHAPE_FAMILIES: dict[str, list[str]] = SHAPE_FAMILIES.copy()
 
     def __init__(self, difficulty: float = 0.0):
         self.difficulty = difficulty
@@ -1002,6 +1004,13 @@ class ObjectGenerator:
         """
         if category is None:
             category = random.choice(self.ALL_CATEGORIES)
+        if category in _CUSTOM_SHAPES:
+            return FactoryObject(
+                category=category,
+                tensor=_CUSTOM_SHAPES[category].clone(),
+                attributes={"shape_family": "custom"}
+            )
+
         if category not in _CATEGORY_TO_FAMILY:
             raise ValueError(
                 f"Unknown category {category!r}. "

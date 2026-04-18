@@ -65,6 +65,8 @@ class FactoryWorld:
         # automatically; additional contracts are accepted explicitly
         # from the Contracts UI.
         self.accepted_contract_ids: set[str] = set()
+        self.disabled_categories: set[str] = set()
+
         self.active_categories: list[str] = []
         # Kept for legacy preset / save-load compatibility. The auto-
         # unlock path still works for presets that populate this list.
@@ -88,9 +90,13 @@ class FactoryWorld:
         self.tick_count += 1
 
         # 1. Generate objects
-        new_objects = self.object_generator.generate_batch(
-            self.objects_per_tick, categories=self.active_categories
-        )
+        enabled = [c for c in self.active_categories if c not in self.disabled_categories]
+        if not enabled:
+            new_objects = []
+        else:
+            new_objects = self.object_generator.generate_batch(
+                self.objects_per_tick, categories=enabled
+            )
 
         # 2. Apply global speed level to all nodes
         for node in self.graph.nodes.values():

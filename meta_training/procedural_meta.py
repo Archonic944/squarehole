@@ -227,7 +227,7 @@ def _draw_random_straight(img=None) -> Image.Image:
     cx, cy = CENTER + random.randint(-8, 8), CENTER + random.randint(-8, 8)
     r = random.randint(20, 34)
     color = _random_color()
-    n_sides = random.choice([3, 4, 5, 6, 7, 8])
+    n_sides = random.choice([3, 4, 5])
     pts = _poly_pts(cx, cy, r, n_sides,
                     rotation=random.uniform(0, 360), jitter=0.0)
     _draw_fill(draw, pts, color)
