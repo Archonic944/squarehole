@@ -2,6 +2,11 @@
 
 A Factorio-style idle factory game where every worker on the floor is a real, MAML-adapted neural network you train yourself by drawing examples.
 
+![a simple factory routing](app/img/simple-routing.gif)
+
+![the training screen](app/img/training.png)
+![the contracts screen](app/img/contracts.png)
+
 ## Quick start
 
 Requires **Python 3.11** (learn2learn has build issues on 3.12+). Apple Silicon users get MPS acceleration automatically.
